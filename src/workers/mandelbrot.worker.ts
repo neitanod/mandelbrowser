@@ -1,5 +1,7 @@
+import { log } from '../utils/logger';
+
 self.onmessage = function (e) {
-  console.log('Worker: Message received.', e.data);
+  log('Worker: Message received.', e.data);
   const { canvasWidth, canvasHeight, centerX, centerY, zoom } = e.data;
   const MAX_ITERATIONS = 1000;
 
@@ -25,7 +27,7 @@ self.onmessage = function (e) {
     }
   }
 
-  console.log('Worker: Sending message back.');
+  log('Worker: Sending message back.');
   self.postMessage(imageData);
 };
 

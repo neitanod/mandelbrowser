@@ -4,6 +4,17 @@ Este documento registra el progreso, las decisiones clave y los hitos del desarr
 
 ## 2025-07-30
 
+### Hito: Implementación de Wrapper para Logs
+
+**Estado:** Completado.
+
+**Actividades Realizadas:**
+
+1.  **Creación de `src/utils/logger.ts`:** Se creó un módulo centralizado para el manejo de logs (`log`, `error`) con un flag `DEBUG_MODE` para activar/desactivar la salida de la consola.
+2.  **Reemplazo de `console.log`:** Todas las llamadas directas a `console.log` y `console.error` en `main.ts`, `App.vue`, `HomeView.vue`, `MandelbrotViewer.vue`, `useMandelbrotWorker.ts` y `mandelbrot.worker.ts` fueron reemplazadas por llamadas a las funciones `log` y `error` del nuevo módulo.
+
+---
+
 ### Hito: Ajuste de Paleta de Colores (Azules Apagados y Naranjas Calmos)
 
 **Estado:** Completado.

@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { RouterView } from 'vue-router'
+import { log } from './utils/logger';
+
+log('App.vue: Setup executed.');
 </script>
 
 <template>

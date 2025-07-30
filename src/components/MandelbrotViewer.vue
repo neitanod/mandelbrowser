@@ -25,6 +25,7 @@ import { useMandelbrotWorker } from '../composables/useMandelbrotWorker';
 import { useViewStore } from '../stores/view';
 import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
+import { log } from '../utils/logger';
 
 // State and Store
 const viewStore = useViewStore();
@@ -78,12 +79,12 @@ onMounted(async () => {
     renderCanvas.height = canvas.height;
   }
 
-  console.log('MandelbrotViewer: onMounted - Canvas setup complete.');
+  log('MandelbrotViewer: onMounted - Canvas setup complete.');
 
   // Wait for the initial navigation to complete
   await router.isReady();
 
-  console.log('MandelbrotViewer: onMounted - Router ready. Current hash:', route.hash);
+  log('MandelbrotViewer: onMounted - Router ready. Current hash:', route.hash);
 
   // Now that the router is ready, the hash is reliable.
   updateFromUrl(route.hash);
@@ -93,14 +94,14 @@ onMounted(async () => {
   watch([centerX, centerY, zoom], (newValue, oldValue) => {
     // Avoid re-rendering if the change came from the URL itself
     if (newValue.every((v, i) => v === oldValue[i])) return;
-    console.log('MandelbrotViewer: State changed. Requesting render.', { centerX: centerX.value, centerY: centerY.value, zoom: zoom.value });
+    log('MandelbrotViewer: State changed. Requesting render.', { centerX: centerX.value, centerY: centerY.value, zoom: zoom.value });
     requestRender();
     updateUrl();
   });
 
   // Watch for browser back/forward navigation
   watch(() => route.hash, (newHash) => {
-    console.log('MandelbrotViewer: URL hash changed. Updating from URL.', newHash);
+    log('MandelbrotViewer: URL hash changed. Updating from URL.', newHash);
     updateFromUrl(newHash);
   });
 });
@@ -111,20 +112,20 @@ function setupCanvasDimensions(canvas: HTMLCanvasElement) {
   canvas.height = window.innerHeight * dpr;
   canvas.style.width = `${window.innerWidth}px`;
   canvas.style.height = `${window.innerHeight}px`;
-  console.log('MandelbrotViewer: Canvas dimensions set.', { width: canvas.width, height: canvas.height, dpr });
+  log('MandelbrotViewer: Canvas dimensions set.', { width: canvas.width, height: canvas.height, dpr });
 }
 
 // --- Rendering Logic ---
 
 function requestRender() {
-  console.log('MandelbrotViewer: requestRender called.', { renderCanvasReady: !!renderCanvas, isRendering: isRendering.value });
+  log('MandelbrotViewer: requestRender called.', { renderCanvasReady: !!renderCanvas, isRendering: isRendering.value });
   if (!renderCanvas || isRendering.value) return;
   
   // Reset transformations before a new render
   resetTransforms();
 
   nextTick(() => {
-    console.log('MandelbrotViewer: Sending render request to worker.', { 
+    log('MandelbrotViewer: Sending render request to worker.', { 
       canvasWidth: renderCanvas!.width,
       canvasHeight: renderCanvas!.height,
       centerX: centerX.value,
@@ -142,13 +143,13 @@ function requestRender() {
 }
 
 watch(renderedImage, (newImage) => {
-  console.log('MandelbrotViewer: renderedImage updated.', { newImage: !!newImage });
+  log('MandelbrotViewer: renderedImage updated.', { newImage: !!newImage });
   if (newImage && renderCanvas) {
     const renderCtx = renderCanvas.getContext('2d');
     if (renderCtx) {
       renderCtx.putImageData(newImage, 0, 0);
       drawRenderedToDisplay();
-      console.log('MandelbrotViewer: Image drawn to display canvas.');
+      log('MandelbrotViewer: Image drawn to display canvas.');
     }
   }
 });

@@ -1,4 +1,5 @@
 import { ref, onUnmounted } from 'vue';
+import { log, error } from '../utils/logger';
 
 export function useMandelbrotWorker() {
   const worker = new Worker(new URL('../workers/mandelbrot.worker.ts', import.meta.url), { type: 'module' });
@@ -12,7 +13,7 @@ export function useMandelbrotWorker() {
   };
 
   worker.onerror = (e) => {
-    console.error('Error in Mandelbrot worker:', e);
+    error('Error in Mandelbrot worker:', e);
     isRendering.value = false;
   };
 
@@ -23,7 +24,7 @@ export function useMandelbrotWorker() {
     centerY: number; 
     zoom: number; 
   }) {
-    console.log('useMandelbrotWorker: Sending message to worker.', options);
+    log('useMandelbrotWorker: Sending message to worker.', options);
     if (isRendering.value) {
       // Optional: Cancel previous work if a new render is requested
       // For now, we just ignore new requests while rendering.
