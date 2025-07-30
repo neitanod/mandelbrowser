@@ -184,6 +184,9 @@ function updateUrl() {
 
 // Mouse Pan
 function handleMouseDown(e: MouseEvent) {
+  log('handleMouseDown: Event clientX, clientY:', e.clientX, e.clientY);
+  log('handleMouseDown: Initial panX, panY:', panX.value, panY.value);
+  log('handleMouseDown: Current centerX, centerY, zoom:', centerX.value, centerY.value, zoom.value);
   isPanning.value = true;
   panStartX.value = e.clientX - panX.value;
   panStartY.value = e.clientY - panY.value;
@@ -193,6 +196,8 @@ function handleMouseMove(e: MouseEvent) {
   if (!isPanning.value) return;
   panX.value = e.clientX - panStartX.value;
   panY.value = e.clientY - panStartY.value;
+  log('handleMouseMove: Current clientX, clientY:', e.clientX, e.clientY);
+  log('handleMouseMove: Updated panX, panY:', panX.value, panY.value);
 }
 
 function handleMouseUp() {
@@ -210,6 +215,9 @@ function handleWheel(e: WheelEvent) {
 
 // Touch Gestures
 function handleTouchStart(e: TouchEvent) {
+  log('handleTouchStart: Event clientX, clientY:', e.touches[0].clientX, e.touches[0].clientY);
+  log('handleTouchStart: Initial panX, panY:', panX.value, panY.value);
+  log('handleTouchStart: Current centerX, centerY, zoom:', centerX.value, centerY.value, zoom.value);
   if (e.touches.length === 1) {
     isPanning.value = true;
     panStartX.value = e.touches[0].clientX - panX.value;
@@ -225,6 +233,8 @@ function handleTouchMove(e: TouchEvent) {
   if (e.touches.length === 1 && isPanning.value) {
     panX.value = e.touches[0].clientX - panStartX.value;
     panY.value = e.touches[0].clientY - panStartY.value;
+    log('handleTouchMove: Current clientX, clientY:', e.touches[0].clientX, e.touches[0].clientY);
+    log('handleTouchMove: Updated panX, panY:', panX.value, panY.value);
   } else if (e.touches.length === 2) {
     const newDist = getTouchDistance(e.touches);
     gestureZoom.value = newDist / initialTouchDistance;
@@ -254,9 +264,14 @@ function getTouchDistance(touches: TouchList): number {
 // --- Applying Transformations ---
 
 function applyPan() {
+  log('applyPan: Before calculation - panX, panY:', panX.value, panY.value);
+  log('applyPan: Before calculation - centerX, centerY, zoom:', centerX.value, centerY.value, zoom.value);
   const dpr = window.devicePixelRatio || 1;
-  const newCenterX = centerX.value - (panX.value * dpr * zoom.value);
-  const newCenterY = centerY.value - (panY.value * dpr * zoom.value);
+  log('applyPan: dpr:', dpr);
+  // CORRECTED: Removed multiplication by dpr
+  const newCenterX = centerX.value - (panX.value * zoom.value);
+  const newCenterY = centerY.value - (panY.value * zoom.value);
+  log('applyPan: After calculation - newCenterX, newCenterY:', newCenterX, newCenterY);
   setView({ centerX: newCenterX, centerY: newCenterY, zoom: zoom.value });
 }
 

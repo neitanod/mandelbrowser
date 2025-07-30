@@ -4,6 +4,17 @@ Este documento registra el progreso, las decisiones clave y los hitos del desarr
 
 ## 2025-07-30
 
+### Hito: Corrección de Paneo en Dispositivos Táctiles
+
+**Estado:** Completado.
+
+**Actividades Realizadas:**
+
+1.  **Diagnóstico del Problema:** Se identificó que el renderizado final del paneo no coincidía con la posición esperada en dispositivos táctiles. Los logs revelaron que el `dpr` (device pixel ratio) se estaba aplicando incorrectamente en el cálculo de las nuevas coordenadas del centro.
+2.  **Corrección de `applyPan`:** Se eliminó la multiplicación por `dpr` en el cálculo de `newCenterX` y `newCenterY` dentro de la función `applyPan` en `src/components/MandelbrotViewer.vue`.
+
+---
+
 ### Hito: Implementación de Wrapper para Logs
 
 **Estado:** Completado.
@@ -111,4 +122,5 @@ Este documento registra el progreso, las decisiones clave y los hitos del desarr
 ### Hito: Inicio del Proyecto y Definición del Plan
 
 **Estado:** Completado.
+
 
