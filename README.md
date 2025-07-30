@@ -1,45 +1,76 @@
-# temp-vue-project
+# Mandelbrowser
 
-This template should help get you started developing with Vue 3 in Vite.
+![Mandelbrowser Screenshot](docs/screenshot.png) <!-- Placeholder for a future screenshot -->
 
-## Recommended IDE Setup
+Una aplicación web interactiva para explorar el fascinante conjunto de Mandelbrot, diseñada con una experiencia de usuario fluida en mente, especialmente para dispositivos móviles.
 
-[VSCode](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
+## Características
 
-## Type Support for `.vue` Imports in TS
+*   **Visualización Interactiva:** Explora el conjunto de Mandelbrot con paneo y zoom.
+*   **Optimizado para Móviles:** Soporte para gestos táctiles (pinch-to-zoom, arrastrar) y diseño responsivo.
+*   **Rendimiento Fluido:** Implementa una estrategia de renderizado progresivo similar a Google Maps, utilizando Web Workers para cálculos intensivos en segundo plano, asegurando que la interfaz de usuario permanezca responsiva.
+*   **URL Persistente:** El estado actual de la vista (posición y zoom) se refleja en la URL, permitiendo compartir y guardar vistas específicas del fractal.
+*   **Paleta de Colores Personalizada:** Un esquema de colores de azules apagados y naranjas calmos para una estética única.
 
-TypeScript cannot handle type information for `.vue` imports by default, so we replace the `tsc` CLI with `vue-tsc` for type checking. In editors, we need [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) to make the TypeScript language service aware of `.vue` types.
+## Tecnologías Utilizadas
 
-## Customize configuration
+*   **Frontend Framework:** Vue 3
+*   **Lenguaje:** TypeScript
+*   **Gestión de Estado:** Pinia
+*   **Enrutamiento:** Vue Router
+*   **Bundler:** Vite
+*   **Pruebas Unitarias:** Vitest
+*   **Calidad de Código:** ESLint y Prettier
 
-See [Vite Configuration Reference](https://vite.dev/config/).
+## Configuración del Proyecto
 
-## Project Setup
+Para configurar y ejecutar el proyecto localmente, sigue estos pasos:
 
-```sh
-npm install
-```
+1.  **Clonar el repositorio:**
+    ```bash
+    git clone <URL_DEL_REPOSITORIO>
+    cd mandelbrowser
+    ```
+2.  **Instalar dependencias:**
+    ```bash
+    npm install
+    ```
 
-### Compile and Hot-Reload for Development
+## Comandos Disponibles
 
-```sh
+### Compilar y Recargar en Caliente para Desarrollo
+
+```bash
 npm run dev
 ```
 
-### Type-Check, Compile and Minify for Production
+Esto iniciará el servidor de desarrollo en `http://localhost:5173` (o un puerto similar).
 
-```sh
+### Compilar para Producción
+
+```bash
 npm run build
 ```
 
-### Run Unit Tests with [Vitest](https://vitest.dev/)
+Este comando compilará la aplicación para producción en el directorio `dist/`. Los archivos generados están optimizados y listos para ser desplegados en cualquier servidor web estático. La configuración de Vite (`vite.config.ts`) asegura que la aplicación funcione correctamente incluso si se despliega en un subdirectorio.
 
-```sh
+### Ejecutar Tests Unitarios
+
+```bash
 npm run test:unit
 ```
 
-### Lint with [ESLint](https://eslint.org/)
+### Lint y Formatear Código
 
-```sh
+```bash
 npm run lint
+npm run format
 ```
+
+## Registro de Desarrollo
+
+Para un historial detallado de las decisiones de desarrollo, correcciones y características implementadas, consulta el archivo `DEV_LOG.md`.
+
+## Requisitos
+
+Los requisitos detallados del proyecto se encuentran en el archivo `REQUIREMENTS.md`.
