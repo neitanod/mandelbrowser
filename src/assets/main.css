@@ -1,9 +1,15 @@
 @import './base.css';
 
+html, body, #app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* Prevent scrollbars */
+}
+
 #app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
+  /* Removed max-width, margin, padding, and grid styles */
   font-weight: normal;
 }
 
@@ -23,13 +29,11 @@ a,
 
 @media (min-width: 1024px) {
   body {
-    display: flex;
-    place-items: center;
+    /* Removed display: flex and place-items: center */
   }
 
   #app {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 0 2rem;
+    /* Removed display: grid and grid-template-columns */
+    padding: 0; /* Ensure no padding on larger screens either */
   }
 }

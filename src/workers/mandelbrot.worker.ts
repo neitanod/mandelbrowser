@@ -2,7 +2,7 @@ import { log } from '../utils/logger';
 
 self.onmessage = function (e) {
   log('Worker: Message received.', e.data);
-  const { canvasWidth, canvasHeight, centerX, centerY, zoom } = e.data;
+  const { canvasWidth, canvasHeight, centerX, centerY, zoom, renderId } = e.data;
   const MAX_ITERATIONS = 1000;
 
   const imageData = new ImageData(canvasWidth, canvasHeight);
@@ -27,8 +27,8 @@ self.onmessage = function (e) {
     }
   }
 
-  log('Worker: Sending message back.');
-  self.postMessage(imageData);
+  log('Worker: Sending message back.', { renderId });
+  self.postMessage({ imageData, renderId });
 };
 
 function calculateMandelbrot(cx: number, cy: number, maxIterations: number): number {
