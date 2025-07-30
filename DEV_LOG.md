@@ -4,6 +4,35 @@ Este documento registra el progreso, las decisiones clave y los hitos del desarr
 
 ## 2025-07-30
 
+### Hito: Ajuste de Paleta de Colores (Azules Apagados y Naranjas Calmos)
+
+**Estado:** Completado.
+
+**Actividades Realizadas:**
+
+1.  **Modificación de `getColor`:** Se actualizó la función `getColor` en `src/workers/mandelbrot.worker.ts` para implementar una nueva paleta de colores.
+    *   Se utiliza un gradiente lineal entre un azul-gris apagado (`r: 70, g: 90, b: 110`) y un naranja calmo (`r: 255, g: 160, b: 80`).
+    *   El negro se mantiene para los puntos dentro del conjunto de Mandelbrot.
+
+---
+
+### Hito: Corrección de Build en Producción y Errores de TypeScript
+
+**Estado:** Completado.
+
+**Actividades Realizadas:**
+
+1.  **Problema de Renderizado en Producción:** Se identificó que la aplicación no renderizaba el fractal en producción (se quedaba en "Hello Vue!") debido a un manejo incorrecto del Web Worker por parte de Vite.
+2.  **Solución del Web Worker:**
+    *   Se movió `public/mandelbrot.worker.js` a `src/workers/mandelbrot.worker.ts`.
+    *   Se actualizó `src/composables/useMandelbrotWorker.ts` para instanciar el worker usando `new Worker(new URL('../workers/mandelbrot.worker.ts', import.meta.url), { type: 'module' })`.
+    *   Se eliminó el archivo antiguo de `public/`.
+3.  **Errores de TypeScript en Worker:** Tras el movimiento, TypeScript detectó errores de tipo implícitos en `src/workers/mandelbrot.worker.ts`.
+4.  **Corrección de Tipos:** Se añadieron anotaciones de tipo explícitas a los parámetros de las funciones `calculateMandelbrot`, `getColor` y `hslToRgb` en el worker.
+5.  **Recompilación:** Se generó una nueva versión de producción con todos los cambios aplicados.
+
+---
+
 ### Hito: Correcciones Finales y Mejora de Paleta de Colores
 
 **Estado:** Completado.

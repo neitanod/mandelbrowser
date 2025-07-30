@@ -1,4 +1,5 @@
 self.onmessage = function (e) {
+  console.log('Worker: Message received.', e.data);
   const { canvasWidth, canvasHeight, centerX, centerY, zoom } = e.data;
   const MAX_ITERATIONS = 1000;
 
@@ -24,10 +25,11 @@ self.onmessage = function (e) {
     }
   }
 
+  console.log('Worker: Sending message back.');
   self.postMessage(imageData);
 };
 
-function calculateMandelbrot(cx, cy, maxIterations) {
+function calculateMandelbrot(cx: number, cy: number, maxIterations: number): number {
   let zx = 0;
   let zy = 0;
   let i = 0;
@@ -40,10 +42,12 @@ function calculateMandelbrot(cx, cy, maxIterations) {
   return i === maxIterations ? 0 : i;
 }
 
-function getColor(iterations, maxIterations) {
+function getColor(iterations: number, maxIterations: number) {
   // Define the gradient colors
-  const startColor = { r: 40, g: 50, b: 70 };   // Dark Slate Blue (Pastel)
-  const endColor = { r: 180, g: 190, b: 200 }; // Light Blue-Gray
+  // Blue-gray (apagado)
+  const startColor = { r: 70, g: 90, b: 110 }; 
+  // Calm Orange (calmo)
+  const endColor = { r: 255, g: 160, b: 80 }; 
 
   // Create a smooth, non-linear gradient
   // Using Math.log gives more color variation to points closer to the set
@@ -59,12 +63,12 @@ function getColor(iterations, maxIterations) {
 }
 
 // HSL to RGB conversion (no longer used, but kept for potential future use)
-function hslToRgb(h, s, l) {
+function hslToRgb(h: number, s: number, l: number) {
   let r, g, b;
   if (s == 0) {
     r = g = b = l; // achromatic
   } else {
-    const hue2rgb = (p, q, t) => {
+    const hue2rgb = (p: number, q: number, t: number) => {
       if (t < 0) t += 1;
       if (t > 1) t -= 1;
       if (t < 1 / 6) return p + (q - p) * 6 * t;

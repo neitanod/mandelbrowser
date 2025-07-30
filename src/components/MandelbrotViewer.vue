@@ -52,6 +52,10 @@ let initialTouchDistance = 0;
 
 // --- Lifecycle and Initialization ---
 
+const MAX_CANVAS_DIMENSION = 800; // Max width or height for the render canvas
+
+// --- Lifecycle and Initialization ---
+
 onMounted(async () => {
   const canvas = displayCanvas.value;
   if (!canvas) return;
@@ -59,11 +63,27 @@ onMounted(async () => {
   setupCanvasDimensions(canvas);
   
   renderCanvas = document.createElement('canvas');
-  renderCanvas.width = canvas.width;
-  renderCanvas.height = canvas.height;
+  // Adjust render canvas dimensions based on MAX_CANVAS_DIMENSION
+  const aspectRatio = canvas.width / canvas.height;
+  if (canvas.width > MAX_CANVAS_DIMENSION || canvas.height > MAX_CANVAS_DIMENSION) {
+    if (canvas.width > canvas.height) {
+      renderCanvas.width = MAX_CANVAS_DIMENSION;
+      renderCanvas.height = MAX_CANVAS_DIMENSION / aspectRatio;
+    } else {
+      renderCanvas.height = MAX_CANVAS_DIMENSION;
+      renderCanvas.width = MAX_CANVAS_DIMENSION * aspectRatio;
+    }
+  } else {
+    renderCanvas.width = canvas.width;
+    renderCanvas.height = canvas.height;
+  }
+
+  console.log('MandelbrotViewer: onMounted - Canvas setup complete.');
 
   // Wait for the initial navigation to complete
   await router.isReady();
+
+  console.log('MandelbrotViewer: onMounted - Router ready. Current hash:', route.hash);
 
   // Now that the router is ready, the hash is reliable.
   updateFromUrl(route.hash);
@@ -73,12 +93,14 @@ onMounted(async () => {
   watch([centerX, centerY, zoom], (newValue, oldValue) => {
     // Avoid re-rendering if the change came from the URL itself
     if (newValue.every((v, i) => v === oldValue[i])) return;
+    console.log('MandelbrotViewer: State changed. Requesting render.', { centerX: centerX.value, centerY: centerY.value, zoom: zoom.value });
     requestRender();
     updateUrl();
   });
 
   // Watch for browser back/forward navigation
   watch(() => route.hash, (newHash) => {
+    console.log('MandelbrotViewer: URL hash changed. Updating from URL.', newHash);
     updateFromUrl(newHash);
   });
 });
@@ -89,17 +111,26 @@ function setupCanvasDimensions(canvas: HTMLCanvasElement) {
   canvas.height = window.innerHeight * dpr;
   canvas.style.width = `${window.innerWidth}px`;
   canvas.style.height = `${window.innerHeight}px`;
+  console.log('MandelbrotViewer: Canvas dimensions set.', { width: canvas.width, height: canvas.height, dpr });
 }
 
 // --- Rendering Logic ---
 
 function requestRender() {
+  console.log('MandelbrotViewer: requestRender called.', { renderCanvasReady: !!renderCanvas, isRendering: isRendering.value });
   if (!renderCanvas || isRendering.value) return;
   
   // Reset transformations before a new render
   resetTransforms();
 
   nextTick(() => {
+    console.log('MandelbrotViewer: Sending render request to worker.', { 
+      canvasWidth: renderCanvas!.width,
+      canvasHeight: renderCanvas!.height,
+      centerX: centerX.value,
+      centerY: centerY.value,
+      zoom: zoom.value,
+    });
     render({
       canvasWidth: renderCanvas!.width,
       canvasHeight: renderCanvas!.height,
@@ -111,20 +142,27 @@ function requestRender() {
 }
 
 watch(renderedImage, (newImage) => {
+  console.log('MandelbrotViewer: renderedImage updated.', { newImage: !!newImage });
   if (newImage && renderCanvas) {
     const renderCtx = renderCanvas.getContext('2d');
     if (renderCtx) {
       renderCtx.putImageData(newImage, 0, 0);
       drawRenderedToDisplay();
+      console.log('MandelbrotViewer: Image drawn to display canvas.');
     }
   }
 });
 
 function drawRenderedToDisplay() {
   const displayCtx = displayCanvas.value?.getContext('2d');
-  if (displayCtx && renderCanvas) {
-    displayCtx.clearRect(0, 0, displayCanvas.value!.width, displayCanvas.value!.height);
-    displayCtx.drawImage(renderCanvas, 0, 0);
+  if (displayCtx && renderCanvas && displayCanvas.value) {
+    displayCtx.clearRect(0, 0, displayCanvas.value.width, displayCanvas.value.height);
+    // Draw the off-screen rendered image onto the visible canvas, scaling it to fit
+    displayCtx.drawImage(
+      renderCanvas,
+      0, 0, renderCanvas.width, renderCanvas.height, // Source rectangle (entire renderCanvas)
+      0, 0, displayCanvas.value.width, displayCanvas.value.height // Destination rectangle (entire displayCanvas)
+    );
   }
 }
 
