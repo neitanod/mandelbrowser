@@ -13,7 +13,7 @@
     <canvas
       ref="displayCanvas"
       class="display-canvas"
-      :style="{ transform: `translate(${viewPanX}px, ${viewPanY}px) scale(${viewGestureZoom})` }"
+      :style="{ transform: `translate(${viewPanX}px, ${viewPanY}px) scale(${viewGestureZoom})`, 'transform-origin': viewTransformOrigin }"
     ></canvas>
     <div v-if="isRendering" class="loading-indicator">Rendering...</div>
   </div>
@@ -42,25 +42,30 @@ const { isRendering, renderedImage, render } = useMandelbrotWorker();
 const displayCanvas = ref<HTMLCanvasElement | null>(null);
 let renderCanvas: HTMLCanvasElement | null = null; // Off-screen canvas
 
-// Gesture State
-const isPanning = ref(false);
-const panStartX = ref(0);
-const panStartY = ref(0);
-const panX = ref(0);
-const panY = ref(0);
-const gestureZoom = ref(1);
-let initialTouchDistance = 0;
+// --- Gesture State ---
+const isInteracting = ref(false);
 
-// View State (for CSS transform)
+// Mouse Pan State
+const panStart = ref({ x: 0, y: 0 });
+
+// Touch Gesture State
+const touchState = ref<{
+  initialDistance: number;
+  initialPivot: { x: number; y: number };
+  initialCenterX: number;
+  initialCenterY: number;
+  initialZoom: number;
+} | null>(null);
+
+// --- View State (for CSS transform) ---
 const viewPanX = ref(0);
 const viewPanY = ref(0);
 const viewGestureZoom = ref(1);
+const viewTransformOrigin = ref('center center');
 
 // --- Lifecycle and Initialization ---
 
-const MAX_CANVAS_DIMENSION = 800; // Max width or height for the render canvas
-
-// --- Lifecycle and Initialization ---
+const MAX_CANVAS_DIMENSION = 800;
 
 onMounted(async () => {
   const canvas = displayCanvas.value;
@@ -69,7 +74,6 @@ onMounted(async () => {
   setupCanvasDimensions(canvas);
 
   renderCanvas = document.createElement('canvas');
-  // Adjust render canvas dimensions based on MAX_CANVAS_DIMENSION
   const aspectRatio = canvas.width / canvas.height;
   if (canvas.width > MAX_CANVAS_DIMENSION || canvas.height > MAX_CANVAS_DIMENSION) {
     if (canvas.width > canvas.height) {
@@ -84,31 +88,18 @@ onMounted(async () => {
     renderCanvas.height = canvas.height;
   }
 
-  log('MandelbrotViewer: onMounted - Canvas setup complete.');
-
-  // Wait for the initial navigation to complete
   await router.isReady();
-
-  log('MandelbrotViewer: onMounted - Router ready. Current hash:', route.hash);
-
-  // Now that the router is ready, the hash is reliable.
   updateFromUrl(route.hash);
-  requestRender(); // Perform the initial render
+  requestRender();
 
-  // Watch for subsequent state changes to re-render and update URL
-  watch([centerX, centerY, zoom], (newValue, oldValue) => {
-    log('MandelbrotViewer: WATCH triggered. New values:', newValue);
-    log('MandelbrotViewer: WATCH triggered. Old values:', oldValue);
-    // Avoid re-rendering if the change came from the URL itself
-    // if (newValue.every((v, i) => v === oldValue[i])) return; // Temporarily disabled for debugging
-    log('MandelbrotViewer: State changed. Requesting render.', { centerX: centerX.value, centerY: centerY.value, zoom: zoom.value });
+  watch([centerX, centerY, zoom], () => {
+    if (isInteracting.value) return;
     requestRender();
     updateUrl();
   });
 
-  // Watch for browser back/forward navigation
   watch(() => route.hash, (newHash) => {
-    log('MandelbrotViewer: URL hash changed. Updating from URL.', newHash);
+    if (isInteracting.value) return;
     updateFromUrl(newHash);
   });
 });
@@ -119,25 +110,13 @@ function setupCanvasDimensions(canvas: HTMLCanvasElement) {
   canvas.height = window.innerHeight * dpr;
   canvas.style.width = `${window.innerWidth}px`;
   canvas.style.height = `${window.innerHeight}px`;
-  log('MandelbrotViewer: Canvas dimensions set.', { width: canvas.width, height: canvas.height, dpr });
 }
 
 // --- Rendering Logic ---
 
 function requestRender() {
-  log('MandelbrotViewer: requestRender called.', { renderCanvasReady: !!renderCanvas, isRendering: isRendering.value });
   if (!renderCanvas || isRendering.value) return;
-
-  // Do NOT reset transformations here. They will be reset after the new image is drawn.
-
   nextTick(() => {
-    log('MandelbrotViewer: Sending render request to worker.', {
-      canvasWidth: renderCanvas!.width,
-      canvasHeight: renderCanvas!.height,
-      centerX: centerX.value,
-      centerY: centerY.value,
-      zoom: zoom.value,
-    });
     render({
       canvasWidth: renderCanvas!.width,
       canvasHeight: renderCanvas!.height,
@@ -149,14 +128,14 @@ function requestRender() {
 }
 
 watch(renderedImage, (newImage) => {
-  log('MandelbrotViewer: renderedImage updated.', { newImage: !!newImage });
   if (newImage && renderCanvas) {
     const renderCtx = renderCanvas.getContext('2d');
     if (renderCtx) {
       renderCtx.putImageData(newImage, 0, 0);
-      resetViewTransforms(); // Reset visual state when new image arrives
+      // This is the key: reset the CSS transforms at the exact moment the new
+      // rendered image is ready to be drawn. This prevents any flicker.
+      resetViewTransforms();
       drawRenderedToDisplay();
-      log('MandelbrotViewer: Image drawn to display canvas.');
     }
   }
 });
@@ -165,25 +144,15 @@ function drawRenderedToDisplay() {
   const displayCtx = displayCanvas.value?.getContext('2d');
   if (displayCtx && renderCanvas && displayCanvas.value) {
     displayCtx.clearRect(0, 0, displayCanvas.value.width, displayCanvas.value.height);
-    // Draw the off-screen rendered image onto the visible canvas, scaling it to fit
-    displayCtx.drawImage(
-      renderCanvas,
-      0, 0, renderCanvas.width, renderCanvas.height, // Source rectangle (entire renderCanvas)
-      0, 0, displayCanvas.value.width, displayCanvas.value.height // Destination rectangle (entire displayCanvas)
-    );
+    displayCtx.drawImage(renderCanvas, 0, 0, renderCanvas.width, renderCanvas.height, 0, 0, displayCanvas.value.width, displayCanvas.value.height);
   }
-}
-
-function resetTransforms() {
-  panX.value = 0;
-  panY.value = 0;
-  gestureZoom.value = 1;
 }
 
 function resetViewTransforms() {
   viewPanX.value = 0;
   viewPanY.value = 0;
   viewGestureZoom.value = 1;
+  viewTransformOrigin.value = 'center center';
 }
 
 // --- URL Synchronization ---
@@ -195,86 +164,124 @@ function updateUrl() {
 
 // --- Interaction Handlers ---
 
-// Mouse Pan
 function handleMouseDown(e: MouseEvent) {
-  log('handleMouseDown: Event clientX, clientY:', e.clientX, e.clientY);
-  log('handleMouseDown: Initial viewPanX, viewPanY:', viewPanX.value, viewPanY.value);
-  log('handleMouseDown: Current centerX, centerY, zoom:', centerX.value, centerY.value, zoom.value);
-  isPanning.value = true;
-  panStartX.value = e.clientX - viewPanX.value;
-  panStartY.value = e.clientY - viewPanY.value;
+  isInteracting.value = true;
+  panStart.value = { x: e.clientX, y: e.clientY };
 }
 
 function handleMouseMove(e: MouseEvent) {
-  if (!isPanning.value) return;
-  viewPanX.value = e.clientX - panStartX.value;
-  viewPanY.value = e.clientY - panStartY.value;
-  log('handleMouseMove: Current clientX, clientY:', e.clientX, e.clientY);
-  log('handleMouseMove: Updated viewPanX, viewPanY:', viewPanX.value, viewPanY.value);
+  if (!isInteracting.value || e.buttons !== 1) return;
+  viewPanX.value = e.clientX - panStart.value.x;
+  viewPanY.value = e.clientY - panStart.value.y;
 }
 
-function handleMouseUp() {
-  if (!isPanning.value) return;
-  isPanning.value = false;
-  applyPan();
-  resetTransforms(); // Reset calculation state immediately
+function handleMouseUp(e: MouseEvent) {
+  if (!isInteracting.value) return;
+  isInteracting.value = false;
+
+  if (viewPanX.value !== 0 || viewPanY.value !== 0) {
+    const newCenterX = centerX.value - (viewPanX.value * zoom.value);
+    const newCenterY = centerY.value - (viewPanY.value * zoom.value);
+    setView({ centerX: newCenterX, centerY: newCenterY, zoom: zoom.value });
+    requestRender();
+    updateUrl();
+  } else {
+    resetViewTransforms();
+  }
 }
 
-// Mouse Wheel Zoom
 function handleWheel(e: WheelEvent) {
   e.preventDefault();
-  const zoomFactor = e.deltaY < 0 ? 0.8 : 1.25; // Zoom in or out
-  applyZoom(e.clientX, e.clientY, zoomFactor);
+  const zoomFactor = e.deltaY < 0 ? 0.8 : 1.25;
+  
+  const dpr = window.devicePixelRatio || 1;
+  const rect = displayCanvas.value!.getBoundingClientRect();
+  const mouseX = (e.clientX - rect.left) * dpr;
+  const mouseY = (e.clientY - rect.top) * dpr;
+
+  const pointX = centerX.value + (mouseX - rect.width * dpr / 2) * zoom.value;
+  const pointY = centerY.value + (mouseY - rect.height * dpr / 2) * zoom.value;
+
+  const newZoom = zoom.value * zoomFactor;
+  const newCenterX = pointX + (centerX.value - pointX) * zoomFactor;
+  const newCenterY = pointY + (centerY.value - pointY) * zoomFactor;
+
+  setView({ centerX: newCenterX, centerY: newCenterY, zoom: newZoom });
 }
 
-// Touch Gestures
 function handleTouchStart(e: TouchEvent) {
-  log('handleTouchStart: Event clientX, clientY:', e.touches[0].clientX, e.touches[0].clientY);
-  log('handleTouchStart: Initial viewPanX, viewPanY:', viewPanX.value, viewPanY.value);
-  log('handleTouchStart: Current centerX, centerY, zoom:', centerX.value, centerY.value, zoom.value);
+  e.preventDefault();
+  isInteracting.value = true;
+
   if (e.touches.length === 1) {
-    isPanning.value = true;
-    panStartX.value = e.touches[0].clientX - viewPanX.value;
-    panStartY.value = e.touches[0].clientY - viewPanY.value;
+    panStart.value = { x: e.touches[0].clientX, y: e.touches[0].clientY };
   } else if (e.touches.length === 2) {
-    isPanning.value = false; // Stop panning when two fingers are down
-    initialTouchDistance = getTouchDistance(e.touches);
+    const initialPivot = getTouchMidpoint(e.touches);
+    touchState.value = {
+      initialDistance: getTouchDistance(e.touches),
+      initialPivot: initialPivot,
+      initialCenterX: centerX.value,
+      initialCenterY: centerY.value,
+      initialZoom: zoom.value,
+    };
+
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    viewTransformOrigin.value = `${initialPivot.x - rect.left}px ${initialPivot.y - rect.top}px`;
   }
 }
 
 function handleTouchMove(e: TouchEvent) {
-  log('handleTouchMove: Event triggered.');
   e.preventDefault();
-  if (e.touches.length === 1 && isPanning.value) {
-    viewPanX.value = e.touches[0].clientX - panStartX.value;
-    viewPanY.value = e.touches[0].clientY - panStartY.value;
-    // Update panX and panY for calculation
-    panX.value = viewPanX.value;
-    panY.value = viewPanY.value;
-    log('handleTouchMove: Current clientX, clientY:', e.touches[0].clientX, e.touches[0].clientY);
-    log('handleTouchMove: Updated viewPanX, viewPanY:', viewPanX.value, viewPanY.value);
-  } else if (e.touches.length === 2) {
-    const newDist = getTouchDistance(e.touches);
-    viewGestureZoom.value = newDist / initialTouchDistance;
-    // Update gestureZoom for calculation
-    gestureZoom.value = viewGestureZoom.value;
+  if (!isInteracting.value) return;
+
+  if (e.touches.length === 1) {
+    viewPanX.value = e.touches[0].clientX - panStart.value.x;
+    viewPanY.value = e.touches[0].clientY - panStart.value.y;
+  } else if (e.touches.length === 2 && touchState.value) {
+    const currentDist = getTouchDistance(e.touches);
+    if (touchState.value.initialDistance > 0) {
+      viewGestureZoom.value = currentDist / touchState.value.initialDistance;
+    }
+
+    const currentPivot = getTouchMidpoint(e.touches);
+    viewPanX.value = currentPivot.x - touchState.value.initialPivot.x;
+    viewPanY.value = currentPivot.y - touchState.value.initialPivot.y;
   }
 }
 
 function handleTouchEnd(e: TouchEvent) {
-  log('handleTouchEnd: Event triggered.');
-  if (isPanning.value) {
-    isPanning.value = false;
-    applyPan();
-    resetTransforms(); // Reset calculation state immediately after pan
+  e.preventDefault();
+  if (!isInteracting.value) return;
+  isInteracting.value = false; // Gesture ends
+
+  if (touchState.value) { // It was a zoom/pan gesture
+    let finalZoom = touchState.value.initialZoom;
+    if (viewGestureZoom.value > 0) {
+      finalZoom = touchState.value.initialZoom / viewGestureZoom.value;
+    }
+
+    const panX = viewPanX.value;
+    const panY = viewPanY.value;
+
+    const newCenterX = touchState.value.initialCenterX - (panX * touchState.value.initialZoom);
+    const newCenterY = touchState.value.initialCenterY - (panY * touchState.value.initialZoom);
+
+    setView({ centerX: newCenterX, centerY: newCenterY, zoom: finalZoom });
+    requestRender();
+    updateUrl();
+
+  } else { // It was a 1-finger pan
+    if (viewPanX.value !== 0 || viewPanY.value !== 0) {
+      const newCenterX = centerX.value - (viewPanX.value * zoom.value);
+      const newCenterY = centerY.value - (viewPanY.value * zoom.value);
+      setView({ centerX: newCenterX, centerY: newCenterY, zoom: zoom.value });
+      requestRender();
+      updateUrl();
+    }
   }
-  if (gestureZoom.value !== 1) {
-    const rect = displayCanvas.value!.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    applyZoom(centerX, centerY, 1 / gestureZoom.value);
-    resetTransforms(); // Reset calculation state immediately after zoom
-  }
+
+  // Reset gesture state for the next independent gesture.
+  touchState.value = null;
 }
 
 function getTouchDistance(touches: TouchList): number {
@@ -283,43 +290,11 @@ function getTouchDistance(touches: TouchList): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-
-// --- Applying Transformations ---
-
-function applyPan() {
-  log('applyPan: Before calculation - panX, panY:', panX.value, panY.value);
-  log('applyPan: Before calculation - centerX, centerY, zoom:', centerX.value, centerY.value, zoom.value);
-  const dpr = window.devicePixelRatio || 1;
-  log('applyPan: dpr:', dpr);
-  // CORRECTED: Removed multiplication by dpr
-  const newCenterX = centerX.value - (panX.value * zoom.value);
-  const newCenterY = centerY.value - (panY.value * zoom.value);
-  log('applyPan: Calculated newCenterX, newCenterY:', newCenterX, newCenterY);
-  log('applyPan: Calling setView with:', { centerX: newCenterX, centerY: newCenterY, zoom: zoom.value });
-  setView({ centerX: newCenterX, centerY: newCenterY, zoom: zoom.value });
-}
-
-function applyZoom(pivotX: number, pivotY: number, zoomFactor: number) {
-  const dpr = window.devicePixelRatio || 1;
-  const rect = displayCanvas.value!.getBoundingClientRect();
-
-  // Mouse position in canvas coordinate system
-  const mouseX = (pivotX - rect.left) * dpr;
-  const mouseY = (pivotY - rect.top) * dpr;
-
-  // Convert mouse position to complex plane coordinates
-  const pointX = centerX.value + (mouseX - rect.width * dpr / 2) * zoom.value;
-  const pointY = centerY.value + (mouseY - rect.height * dpr / 2) * zoom.value;
-
-  const newZoom = zoom.value * zoomFactor;
-
-  // New center should be the point we zoomed in on
-  const newCenterX = pointX;
-  const newCenterY = pointY;
-
-  log('applyZoom: Calculated newCenterX, newCenterY, newZoom:', newCenterX, newCenterY, newZoom);
-  log('applyZoom: Calling setView with:', { centerX: newCenterX, centerY: newCenterY, zoom: newZoom });
-  setView({ centerX: newCenterX, centerY: newCenterY, zoom: newZoom });
+function getTouchMidpoint(touches: TouchList): { x: number; y: number } {
+  return {
+    x: (touches[0].clientX + touches[1].clientX) / 2,
+    y: (touches[0].clientY + touches[1].clientY) / 2,
+  };
 }
 
 </script>
