@@ -254,33 +254,62 @@ function handleTouchEnd(e: TouchEvent) {
   if (!isInteracting.value) return;
   isInteracting.value = false; // Gesture ends
 
-  if (touchState.value) { // It was a zoom/pan gesture
-    let finalZoom = touchState.value.initialZoom;
-    if (viewGestureZoom.value > 0) {
-      finalZoom = touchState.value.initialZoom / viewGestureZoom.value;
-    }
+  let needsRender = false;
 
-    const panX = viewPanX.value;
-    const panY = viewPanY.value;
+  if (touchState.value) { // It was a 2-finger gesture
+    const { initialCenterX, initialCenterY, initialZoom } = touchState.value;
+    const scale = viewGestureZoom.value;
 
-    const newCenterX = touchState.value.initialCenterX - (panX * touchState.value.initialZoom);
-    const newCenterY = touchState.value.initialCenterY - (panY * touchState.value.initialZoom);
+    // The core idea is to find which point of the original fractal
+    // is now at the center of the viewport.
 
-    setView({ centerX: newCenterX, centerY: newCenterY, zoom: finalZoom });
-    requestRender();
-    updateUrl();
+    // 1. Get the bounding box of the transformed (panned and zoomed) canvas.
+    const rect = displayCanvas.value!.getBoundingClientRect();
+
+    // 2. Find the center of the viewport.
+    const viewportCenter = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+
+    // 3. Calculate the relative position (0 to 1) of the viewport center within the transformed canvas.
+    const relativeX = (viewportCenter.x - rect.left) / rect.width;
+    const relativeY = (viewportCenter.y - rect.top) / rect.height;
+
+    // 4. The total width of the fractal view in complex coordinates. The zoom value
+    // is defined relative to the renderCanvas, so we must use its dimensions.
+    const fractalWidth = renderCanvas!.width * initialZoom;
+    const fractalHeight = renderCanvas!.height * initialZoom;
+
+    // 5. Find the new center by applying the relative position to the initial fractal dimensions.
+    const finalCenterX = initialCenterX - (fractalWidth / 2) + (relativeX * fractalWidth);
+    const finalCenterY = initialCenterY - (fractalHeight / 2) + (relativeY * fractalHeight);
+    const finalZoom = initialZoom / scale;
+
+    log('handleTouchEnd: Debugging Proportional Zoom', {
+        rect: { t: rect.top, l: rect.left, w: rect.width, h: rect.height },
+        viewportCenter,
+        relativeX,
+        relativeY,
+        initialState: { initialCenterX, initialCenterY, initialZoom },
+        fractalDims: { fractalWidth, fractalHeight },
+        finalState: { finalCenterX, finalCenterY, finalZoom }
+    });
+
+    setView({ centerX: finalCenterX, centerY: finalCenterY, zoom: finalZoom });
+    needsRender = true;
 
   } else { // It was a 1-finger pan
     if (viewPanX.value !== 0 || viewPanY.value !== 0) {
       const newCenterX = centerX.value - (viewPanX.value * zoom.value);
       const newCenterY = centerY.value - (viewPanY.value * zoom.value);
       setView({ centerX: newCenterX, centerY: newCenterY, zoom: zoom.value });
-      requestRender();
-      updateUrl();
+      needsRender = true;
     }
   }
 
-  // Reset gesture state for the next independent gesture.
+  if (needsRender) {
+    requestRender();
+    updateUrl();
+  }
+
   touchState.value = null;
 }
 
