@@ -45,23 +45,18 @@ function calculateMandelbrot(cx: number, cy: number, maxIterations: number): num
 }
 
 function getColor(iterations: number, maxIterations: number) {
-  // Define the gradient colors
-  // Blue-gray (apagado)
-  const startColor = { r: 70, g: 90, b: 110 }; 
-  // Calm Orange (calmo)
-  const endColor = { r: 255, g: 160, b: 80 }; 
+  // Mapear el número de iteraciones a un valor de matiz (hue)
+  // Usamos una función no lineal (potencia) para distribuir los colores de forma más interesante
+  // cerca del conjunto de Mandelbrot.
+  let hue = (iterations % maxIterations) / maxIterations; // Normalizar iteraciones a 0-1
+  hue = Math.pow(hue, 0.5); // Ajuste no lineal para mayor detalle
+  hue = hue * 360; // Escalar a grados (0-360)
 
-  // Create a smooth, non-linear gradient
-  // Using Math.log gives more color variation to points closer to the set
-  let t = Math.log(iterations) / Math.log(maxIterations - 1.0);
-  t = Math.min(1, Math.max(0, t)); // Clamp t to the [0, 1] range
+  const saturation = 1; // Saturación completa para colores vibrantes
+  const lightness = 0.5; // Luminosidad media
 
-  // Linear interpolation between the two colors
-  const r = Math.round(startColor.r + t * (endColor.r - startColor.r));
-  const g = Math.round(startColor.g + t * (endColor.g - startColor.g));
-  const b = Math.round(startColor.b + t * (endColor.b - startColor.b));
-
-  return { r, g, b };
+  // Convertir HSL a RGB usando la función existente
+  return hslToRgb(hue / 360, saturation, lightness); // hslToRgb espera h en 0-1
 }
 
 // HSL to RGB conversion (no longer used, but kept for potential future use)
