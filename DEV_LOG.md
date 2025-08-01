@@ -2,6 +2,46 @@
 
 Este documento registra el progreso, las decisiones clave y los hitos del desarrollo de la aplicación.
 
+## 2025-07-31
+
+### Hito: Refactorización del Manejo de Gestos y Renderizado
+
+**Estado:** Completado.
+
+**Actividades Realizadas:**
+
+1.  **Identificación del Problema:** Se detectó que encadenar gestos rápidamente (ej. hacer un zoom e inmediatamente un paneo) podía llevar a un estado inconsistente, donde el renderizado final no se correspondía con la última acción del usuario. Los intentos de solucionar esto con lógica de "interrupción de gestos" resultaron ser demasiado complejos y propensos a errores.
+2.  **Simplificación de la Arquitectura:** Se realizó una refactorización profunda para simplificar el flujo de datos y eliminar las condiciones de carrera.
+    *   **Fuente Única de Verdad:** Se estableció que el `watch` de Vue sobre el estado (`centerX`, `centerY`, `zoom`) es la **única y exclusiva** fuente de verdad para disparar un nuevo renderizado.
+    *   **Eliminación de Lógica Compleja:** Se eliminaron todas las llamadas explícitas a `requestRender()` desde los manejadores de eventos y se deshizo de la bandera `isInteracting` y la lógica de `commitInterruptedGesture`.
+3.  **Nuevo Flujo de Datos:**
+    *   Los manejadores de eventos (`handleMouseUp`, `handleTouchEnd`) ahora solo tienen una responsabilidad: calcular el estado final del gesto y actualizarlo en la tienda Pinia con `setView()`.
+    *   El cambio de estado es detectado por el `watch`, que incondicionalmente solicita un nuevo render.
+    *   El sistema de `renderId` existente en el worker se encarga de forma natural de descartar los renders obsoletos si el usuario encadena gestos más rápido de lo que el worker puede renderizar.
+4.  **Resultado:** La aplicación ahora es extremadamente robusta y fluida. Se pueden encadenar múltiples gestos rápidos e interrumpir renders en curso sin que la interfaz se bloquee o pierda el estado. La lógica es más simple, más predecible y se alinea mejor con los patrones de diseño de Vue.
+
+---
+
+### Hito: Corrección Avanzada del Gesto de Zoom Táctil
+
+**Estado:** Completado.
+
+**Actividades Realizadas:**
+
+1.  **Identificación del Problema:** Se detectó que el gesto de "pellizcar para hacer zoom" (pinch-to-zoom) en dispositivos táctiles no era intuitivo. El zoom se centraba en el medio de la pantalla en lugar de en el punto medio del gesto, y el paneo realizado durante el zoom no se respetaba en el renderizado final.
+2.  **Proceso Iterativo de Depuración:** Se llevó a cabo un proceso de depuración colaborativo para solucionar el problema.
+    *   Se intentaron varios enfoques matemáticos para invertir la transformación CSS del gesto.
+    *   Se utilizaron logs de depuración para analizar los valores intermedios de los cálculos.
+    *   Se identificó que los intentos iniciales fallaban debido a la complejidad de la inversión de la transformación y a errores sutiles en la mezcla de sistemas de coordenadas (`displayCanvas` vs. `renderCanvas`).
+3.  **Implementación de la Solución Final (Basada en Proporciones):**
+    *   Se adoptó un enfoque más robusto y directo sugerido durante el proceso.
+    *   Al final del gesto, se calcula la posición relativa (proporcional, de 0 a 1) del centro del viewport con respecto al canvas transformado por el gesto.
+    *   Esta misma proporción se aplica al espacio de coordenadas del fractal para determinar el nuevo centro de la vista.
+    *   Se corrigió un error final en el cálculo al asegurar que las dimensiones del `renderCanvas` (y no las del `displayCanvas`) se usaran para determinar el ancho y alto del fractal en el espacio complejo.
+4.  **Resultado:** La interacción táctil ahora es completamente intuitiva. El renderizado final coincide perfectamente con la vista previa, respetando tanto el zoom como el paneo realizado durante el gesto.
+
+---
+
 ## 2025-07-30
 
 ### Hito: Corrección de Paneo en Dispositivos Táctiles
