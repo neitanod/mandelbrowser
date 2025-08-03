@@ -16,12 +16,14 @@
       :style="{ transform: `translate(${viewPanX}px, ${viewPanY}px) scale(${viewGestureZoom})`, 'transform-origin': viewTransformOrigin }"
     ></canvas>
     <div v-if="isRendering" class="loading-indicator">Rendering...</div>
+    <div class="size-indicator">{{ formattedSize }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, watch, nextTick } from 'vue';
 import { useMandelbrotWorker } from '../composables/useMandelbrotWorker';
+import { usePhysicalSize } from '../composables/usePhysicalSize';
 import { useViewStore } from '../stores/view';
 import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
@@ -34,12 +36,15 @@ const { setView, updateFromUrl } = viewStore;
 const router = useRouter();
 const route = useRoute();
 
+// --- Canvas Elements ---
+const displayCanvas = ref<HTMLCanvasElement | undefined>(undefined);
+let renderCanvas: HTMLCanvasElement | null = null;
+
+// --- Physical Size Calculation ---
+const { formattedSize } = usePhysicalSize(displayCanvas);
+
 // --- Worker Communication ---
 const { isRendering, renderedImage, render } = useMandelbrotWorker();
-
-// --- Canvas Elements ---
-const displayCanvas = ref<HTMLCanvasElement | null>(null);
-let renderCanvas: HTMLCanvasElement | null = null;
 
 // --- Gesture State ---
 const isPointerDown = ref(false);
@@ -313,5 +318,17 @@ function getTouchMidpoint(touches: TouchList): { x: number; y: number } {
   padding: 5px 10px;
   border-radius: 5px;
   font-family: sans-serif;
+}
+.size-indicator {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.5);
+  color: white;
+  padding: 5px 10px;
+  border-radius: 5px;
+  font-family: sans-serif;
+  white-space: nowrap;
 }
 </style>
