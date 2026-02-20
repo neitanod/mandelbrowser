@@ -1,43 +1,63 @@
 import { ref, onUnmounted } from 'vue';
 import { log, error } from '../utils/logger';
+import MandelbrotWorker from '../workers/mandelbrot.worker?worker';
+
+function createWorker() {
+  return new MandelbrotWorker();
+}
 
 export function useMandelbrotWorker() {
-  const worker = new Worker(new URL('../workers/mandelbrot.worker.ts', import.meta.url), { type: 'module' });
+  let worker = createWorker();
 
   const isRendering = ref(false);
   const renderedImage = ref<ImageData | null>(null);
-  const currentRenderId = ref(0); // Add currentRenderId
+  const currentRenderId = ref(0);
 
-  worker.onmessage = (e) => {
-    const { imageData, renderId } = e.data; // Worker will send imageData and renderId
-    if (renderId === currentRenderId.value) { // Check if renderId matches
-      renderedImage.value = imageData;
+  function setupWorkerHandlers() {
+    worker.onmessage = (e) => {
+      const { imageData, renderId } = e.data;
+      if (renderId === currentRenderId.value) {
+        renderedImage.value = imageData;
+        isRendering.value = false;
+      } else {
+        log('useMandelbrotWorker: Discarding old render result.', renderId, currentRenderId.value);
+      }
+    };
+
+    worker.onerror = (e) => {
+      error('Error in Mandelbrot worker:', e);
       isRendering.value = false;
-    } else {
-      log('useMandelbrotWorker: Discarding old render result.', renderId, currentRenderId.value);
-    }
-  };
+    };
+  }
 
-  worker.onerror = (e) => {
-    error('Error in Mandelbrot worker:', e);
-    isRendering.value = false;
-  };
+  setupWorkerHandlers();
 
-  function render(options: { 
-    canvasWidth: number; 
-    canvasHeight: number; 
-    centerX: number; 
-    centerY: number; 
-    zoom: number; 
+  function render(options: {
+    canvasWidth: number;
+    canvasHeight: number;
+    centerX: number;
+    centerY: number;
+    zoom: number;
+    centerXLo?: number;  // Low component for double-double precision
+    centerYLo?: number;
+    // Quad-double components for ultra-deep zoom
+    centerX2?: number;
+    centerX3?: number;
+    centerY2?: number;
+    centerY3?: number;
   }) {
-    currentRenderId.value++; // Increment renderId for new request
-    const renderOptions = { ...options, renderId: currentRenderId.value }; // Pass renderId
-    log('useMandelbrotWorker: Sending message to worker.', renderOptions);
+    // If already rendering, terminate current worker and create a new one
+    // This prevents wasted CPU cycles on obsolete renders
     if (isRendering.value) {
-      // Optional: Cancel previous work if a new render is requested
-      // For now, we just ignore new requests while rendering.
-      // For progressive rendering, we might want to send a "cancel" message to the worker.
+      log('useMandelbrotWorker: Cancelling previous render, creating new worker.');
+      worker.terminate();
+      worker = createWorker();
+      setupWorkerHandlers();
     }
+
+    currentRenderId.value++;
+    const renderOptions = { ...options, renderId: currentRenderId.value };
+    log('useMandelbrotWorker: Sending message to worker.', renderOptions);
     isRendering.value = true;
     worker.postMessage(renderOptions);
   }

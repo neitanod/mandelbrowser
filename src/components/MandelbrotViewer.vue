@@ -16,7 +16,10 @@
       :style="{ transform: `translate(${viewPanX}px, ${viewPanY}px) scale(${viewGestureZoom})`, 'transform-origin': viewTransformOrigin }"
     ></canvas>
     <div v-if="isRendering" class="loading-indicator">Rendering...</div>
-    <div class="size-indicator">{{ formattedSize }}</div>
+    <div class="size-indicator">
+      <div>{{ formattedSize }}</div>
+      <div v-if="pixelSizeInfo">{{ pixelSizeInfo }}</div>
+    </div>
   </div>
 </template>
 
@@ -28,10 +31,12 @@ import { useViewStore } from '../stores/view';
 import { storeToRefs } from 'pinia';
 import { useRoute, useRouter } from 'vue-router';
 import { log } from '../utils/logger';
+import { calculateNewView, type FractalView, type RenderCanvasInfo, type ViewportInfo } from '../logic/viewUtils';
+import Decimal from 'decimal.js';
 
 // --- State Management ---
 const viewStore = useViewStore();
-const { centerX, centerY, zoom } = storeToRefs(viewStore);
+const { centerX, centerY, zoom, centerXLo, centerYLo, centerX2, centerX3, centerY2, centerY3, centerXDecimal, centerYDecimal, zoomDecimal, centerXStr, centerYStr, zoomStr } = storeToRefs(viewStore);
 const { setView, updateFromUrl } = viewStore;
 const router = useRouter();
 const route = useRoute();
@@ -41,7 +46,7 @@ const displayCanvas = ref<HTMLCanvasElement | undefined>(undefined);
 let renderCanvas: HTMLCanvasElement | null = null;
 
 // --- Physical Size Calculation ---
-const { formattedSize } = usePhysicalSize(displayCanvas);
+const { formattedSize, pixelSizeInfo } = usePhysicalSize(displayCanvas);
 
 // --- Worker Communication ---
 const { isRendering, renderedImage, render } = useMandelbrotWorker();
@@ -52,9 +57,9 @@ const panStart = ref({ x: 0, y: 0 });
 const touchState = ref<{
   initialDistance: number;
   initialPivot: { x: number; y: number };
-  initialCenterX: number;
-  initialCenterY: number;
-  initialZoom: number;
+  initialCenterX: Decimal;
+  initialCenterY: Decimal;
+  initialZoom: Decimal;
 } | null>(null);
 
 // --- Visual Preview State (CSS Transforms) ---
@@ -64,7 +69,30 @@ const viewGestureZoom = ref(1);
 const viewTransformOrigin = ref('center center');
 
 // --- Constants ---
-const MAX_CANVAS_DIMENSION = 800;
+// Adaptive max dimension based on device capabilities
+// Mobile devices (lower DPR or smaller screens) get smaller canvas for performance
+// Desktop devices get larger canvas for quality
+const getMaxCanvasDimension = (): number => {
+  const dpr = window.devicePixelRatio || 1;
+  const screenSize = Math.max(window.screen.width, window.screen.height);
+
+  // Mobile: DPR >= 2 typically, but smaller screens
+  if (screenSize <= 768) {
+    return 600;
+  }
+  // Tablet
+  if (screenSize <= 1024) {
+    return 800;
+  }
+  // Desktop with high DPR (e.g., Retina)
+  if (dpr >= 2) {
+    return 1200;
+  }
+  // Standard desktop
+  return 1000;
+};
+
+const MAX_CANVAS_DIMENSION = getMaxCanvasDimension();
 
 // --- Lifecycle Hooks ---
 onMounted(async () => {
@@ -76,10 +104,13 @@ onMounted(async () => {
 
   await router.isReady();
   updateFromUrl(route.hash);
+  requestRender();
 });
 
 // --- Watchers (The Single Source of Truth for Rendering) ---
-watch([centerX, centerY, zoom], () => {
+// Watch the string values, not the number conversions, to detect changes
+// even when they're too small to affect the double representation
+watch([centerXStr, centerYStr, zoomStr], () => {
   requestRender();
   updateUrl();
 });
@@ -140,6 +171,14 @@ function requestRender() {
       centerX: centerX.value,
       centerY: centerY.value,
       zoom: zoom.value,
+      // Pass low components for double-double precision at high zoom
+      centerXLo: centerXLo.value,
+      centerYLo: centerYLo.value,
+      // Pass quad-double components for ultra-deep zoom
+      centerX2: centerX2.value,
+      centerX3: centerX3.value,
+      centerY2: centerY2.value,
+      centerY3: centerY3.value,
     });
   });
 }
@@ -161,7 +200,8 @@ function resetViewTransforms() {
 
 // --- URL Synchronization ---
 function updateUrl() {
-  const hash = `#/x=${centerX.value.toFixed(10)}&y=${centerY.value.toFixed(10)}&z=${zoom.value.toExponential(2)}`;
+  // Use Decimal's full precision for URL to preserve coordinates when sharing
+  const hash = `#/x=${centerXDecimal.value.toString()}&y=${centerYDecimal.value.toString()}&z=${zoomDecimal.value.toExponential(10)}`;
   router.replace({ hash });
 }
 
@@ -182,26 +222,39 @@ function handleMouseUp() {
   if (!isPointerDown.value) return;
   isPointerDown.value = false;
 
-  if (viewPanX.value !== 0 || viewPanY.value !== 0) {
-    const newCenterX = centerX.value - (viewPanX.value * zoom.value);
-    const newCenterY = centerY.value - (viewPanY.value * zoom.value);
-    setView({ centerX: newCenterX, centerY: newCenterY, zoom: zoom.value });
+  if ((viewPanX.value !== 0 || viewPanY.value !== 0) && renderCanvas) {
+    // Convert CSS pixels to render canvas pixels using Decimal for precision
+    const scaleX = new Decimal(renderCanvas.width).div(window.innerWidth);
+    const scaleY = new Decimal(renderCanvas.height).div(window.innerHeight);
+    const deltaX = scaleX.mul(viewPanX.value).mul(zoomDecimal.value);
+    const deltaY = scaleY.mul(viewPanY.value).mul(zoomDecimal.value);
+    const newCenterX = centerXDecimal.value.minus(deltaX);
+    const newCenterY = centerYDecimal.value.minus(deltaY);
+    setView({ centerX: newCenterX, centerY: newCenterY, zoom: zoomDecimal.value });
   }
 }
 
 function handleWheel(e: WheelEvent) {
-  const zoomFactor = e.deltaY < 0 ? 0.8 : 1.25;
-  const dpr = window.devicePixelRatio || 1;
+  if (!renderCanvas) return;
+  const zoomFactor = new Decimal(e.deltaY < 0 ? 0.8 : 1.25);
   const rect = displayCanvas.value!.getBoundingClientRect();
-  const mouseX = (e.clientX - rect.left) * dpr;
-  const mouseY = (e.clientY - rect.top) * dpr;
 
-  const pointX = centerX.value + (mouseX - rect.width * dpr / 2) * zoom.value;
-  const pointY = centerY.value + (mouseY - rect.height * dpr / 2) * zoom.value;
+  // Calculate mouse offset from center in CSS pixels
+  const offsetCssX = e.clientX - rect.left - rect.width / 2;
+  const offsetCssY = e.clientY - rect.top - rect.height / 2;
 
-  const newZoom = zoom.value * zoomFactor;
-  const newCenterX = pointX + (centerX.value - pointX) * zoomFactor;
-  const newCenterY = pointY + (centerY.value - pointY) * zoomFactor;
+  // Convert to render canvas pixels
+  const scaleX = new Decimal(renderCanvas.width).div(rect.width);
+  const scaleY = new Decimal(renderCanvas.height).div(rect.height);
+  const offsetRenderX = scaleX.mul(offsetCssX);
+  const offsetRenderY = scaleY.mul(offsetCssY);
+
+  // Simplified formula using Decimal for precision
+  // newCenter = center + offset * zoom * (1 - zoomFactor)
+  const oneMinusZoomFactor = new Decimal(1).minus(zoomFactor);
+  const newZoom = zoomDecimal.value.mul(zoomFactor);
+  const newCenterX = centerXDecimal.value.plus(offsetRenderX.mul(zoomDecimal.value).mul(oneMinusZoomFactor));
+  const newCenterY = centerYDecimal.value.plus(offsetRenderY.mul(zoomDecimal.value).mul(oneMinusZoomFactor));
 
   setView({ centerX: newCenterX, centerY: newCenterY, zoom: newZoom });
 }
@@ -215,9 +268,9 @@ function handleTouchStart(e: TouchEvent) {
     touchState.value = {
       initialDistance: getTouchDistance(e.touches),
       initialPivot: initialPivot,
-      initialCenterX: centerX.value,
-      initialCenterY: centerY.value,
-      initialZoom: zoom.value,
+      initialCenterX: centerXDecimal.value,
+      initialCenterY: centerYDecimal.value,
+      initialZoom: zoomDecimal.value,
     };
 
     const rect = (e.target as HTMLElement).getBoundingClientRect();
@@ -242,35 +295,46 @@ function handleTouchMove(e: TouchEvent) {
   }
 }
 
-function handleTouchEnd(e: TouchEvent) {
-  if (!isPointerDown.value) return;
+function handleTouchEnd() {
+  if (!isPointerDown.value || !displayCanvas.value || !renderCanvas) return;
   isPointerDown.value = false;
 
-  if (touchState.value) { // It was a 2-finger gesture
-    const { initialCenterX, initialCenterY, initialZoom } = touchState.value;
-    const scale = viewGestureZoom.value;
+  // Determine the initial view state based on whether it was a pinch gesture
+  // Use Decimal for precision in coordinate calculations
+  const initialView: FractalView = touchState.value
+    ? {
+        centerX: touchState.value.initialCenterX,
+        centerY: touchState.value.initialCenterY,
+        zoom: touchState.value.initialZoom,
+      }
+    : {
+        centerX: centerXDecimal.value,
+        centerY: centerYDecimal.value,
+        zoom: zoomDecimal.value,
+      };
 
-    const rect = displayCanvas.value!.getBoundingClientRect();
-    const viewportCenter = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-    const relativeX = (viewportCenter.x - rect.left) / rect.width;
-    const relativeY = (viewportCenter.y - rect.top) / rect.height;
+  // Get the final bounding rectangle of the display canvas after all visual transforms
+  const finalDisplayCanvasRect = displayCanvas.value.getBoundingClientRect();
 
-    const fractalWidth = renderCanvas!.width * initialZoom;
-    const fractalHeight = renderCanvas!.height * initialZoom;
+  const renderCanvasInfo: RenderCanvasInfo = {
+    width: renderCanvas.width,
+    height: renderCanvas.height,
+  };
 
-    const finalCenterX = initialCenterX - (fractalWidth / 2) + (relativeX * fractalWidth);
-    const finalCenterY = initialCenterY - (fractalHeight / 2) + (relativeY * fractalHeight);
-    const finalZoom = initialZoom / scale;
+  const viewportInfo: ViewportInfo = {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  };
 
-    setView({ centerX: finalCenterX, centerY: finalCenterY, zoom: finalZoom });
+  const newView = calculateNewView(
+    initialView,
+    finalDisplayCanvasRect,
+    renderCanvasInfo,
+    viewportInfo
+  );
 
-  } else { // It was a 1-finger pan
-    if (viewPanX.value !== 0 || viewPanY.value !== 0) {
-      const newCenterX = centerX.value - (viewPanX.value * zoom.value);
-      const newCenterY = centerY.value - (viewPanY.value * zoom.value);
-      setView({ centerX: newCenterX, centerY: newCenterY, zoom: zoom.value });
-    }
-  }
+  setView(newView);
+
   touchState.value = null;
 }
 
