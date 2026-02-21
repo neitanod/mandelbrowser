@@ -1,5 +1,4 @@
 import { log, error } from '../utils/logger';
-import type { ReferenceOrbit } from './perturbation';
 
 // Vertex shader - just passes through coordinates
 const vertexShaderSource = `#version 300 es
@@ -13,110 +12,201 @@ void main() {
 }
 `;
 
-// Fragment shader with perturbation theory
-// Uses double emulation for delta calculations
+// Double-single precision shader
+// Each value = hi + lo, giving ~14 digits precision (enough for zoom ~1e-13)
 const fragmentShaderSource = `#version 300 es
 precision highp float;
 
 in vec2 v_texCoord;
 out vec4 fragColor;
 
-// View parameters
 uniform vec2 u_resolution;
-uniform float u_zoom;
-uniform vec2 u_centerOffset; // Offset from reference point in fractal units
-
-// Reference orbit texture
-uniform sampler2D u_referenceReal;
-uniform sampler2D u_referenceImag;
-uniform int u_referenceLength;
+uniform vec2 u_zoom;  // (zoom_hi, zoom_lo) as double-single
+uniform vec2 u_centerHi;  // (cx_hi, cy_hi)
+uniform vec2 u_centerLo;  // (cx_lo, cy_lo)
 uniform int u_maxIterations;
 
-// Color palette
+// Color palette - MUST match CPU worker exactly!
+// CPU values: [0,7,100], [32,107,203], [237,255,255], [255,170,0], [255,85,0], [200,20,60], [100,7,100], [50,10,80], [10,5,40]
 const vec3 palette[9] = vec3[9](
-  vec3(0.0, 0.027, 0.392),   // Deep blue
-  vec3(0.125, 0.420, 0.796), // Ocean blue
-  vec3(0.929, 1.0, 1.0),     // Cyan white
-  vec3(1.0, 0.667, 0.0),     // Orange
-  vec3(1.0, 0.333, 0.0),     // Red orange
-  vec3(0.784, 0.078, 0.235), // Crimson
-  vec3(0.392, 0.027, 0.392), // Purple
-  vec3(0.196, 0.039, 0.314), // Dark purple
-  vec3(0.039, 0.020, 0.157)  // Very dark blue
+  vec3(0.0/255.0, 7.0/255.0, 100.0/255.0),      // Deep blue
+  vec3(32.0/255.0, 107.0/255.0, 203.0/255.0),   // Ocean blue
+  vec3(237.0/255.0, 255.0/255.0, 255.0/255.0),  // Cyan white
+  vec3(255.0/255.0, 170.0/255.0, 0.0/255.0),    // Orange
+  vec3(255.0/255.0, 85.0/255.0, 0.0/255.0),     // Red orange
+  vec3(200.0/255.0, 20.0/255.0, 60.0/255.0),    // Crimson
+  vec3(100.0/255.0, 7.0/255.0, 100.0/255.0),    // Purple
+  vec3(50.0/255.0, 10.0/255.0, 80.0/255.0),     // Dark purple
+  vec3(10.0/255.0, 5.0/255.0, 40.0/255.0)       // Very dark blue
 );
 
-vec3 getColor(int iterations) {
-  if (iterations == 0) return vec3(0.0);
+// Veltkamp split constant for float32: 2^12 + 1
+const float SPLIT = 4097.0;
 
-  float t = float(iterations) / float(u_maxIterations);
-  float scaledPos = t * 8.0 * 3.0; // Cycle through palette 3 times
+// Force a value to be stored to prevent compiler optimizations
+// This is crucial for double-single arithmetic to work correctly
+float forceEval(float x) {
+  return x + 0.0;  // Forces intermediate result
+}
+
+// Split float into hi and lo parts for exact multiplication
+// Using forceEval to prevent FMA and other optimizations
+vec2 split(float a) {
+  float t = forceEval(SPLIT * a);
+  float temp = forceEval(t - a);
+  float hi = forceEval(t - temp);
+  float lo = forceEval(a - hi);
+  return vec2(hi, lo);
+}
+
+// Two-product: exact a*b = (p, err)
+vec2 twoProd(float a, float b) {
+  float p = forceEval(a * b);
+  vec2 as = split(a);
+  vec2 bs = split(b);
+  // Compute error term carefully
+  float e1 = forceEval(as.x * bs.x - p);
+  float e2 = forceEval(e1 + as.x * bs.y);
+  float e3 = forceEval(e2 + as.y * bs.x);
+  float err = forceEval(e3 + as.y * bs.y);
+  return vec2(p, err);
+}
+
+// Two-sum: exact a+b = (s, err)
+vec2 twoSum(float a, float b) {
+  float s = forceEval(a + b);
+  float v = forceEval(s - a);
+  float e1 = forceEval(a - forceEval(s - v));
+  float e2 = forceEval(b - v);
+  float err = forceEval(e1 + e2);
+  return vec2(s, err);
+}
+
+// Quick two-sum when |a| >= |b|
+vec2 quickTwoSum(float a, float b) {
+  float s = forceEval(a + b);
+  float err = forceEval(b - forceEval(s - a));
+  return vec2(s, err);
+}
+
+// Double-single addition
+vec2 ds_add(vec2 a, vec2 b) {
+  vec2 s = twoSum(a.x, b.x);
+  vec2 t = twoSum(a.y, b.y);
+  float sy = forceEval(s.y + t.x);
+  vec2 s2 = quickTwoSum(s.x, sy);
+  float sy2 = forceEval(s2.y + t.y);
+  return quickTwoSum(s2.x, sy2);
+}
+
+// Double-single subtraction
+vec2 ds_sub(vec2 a, vec2 b) {
+  return ds_add(a, vec2(-b.x, -b.y));
+}
+
+// Double-single multiplication with proper error tracking
+vec2 ds_mul(vec2 a, vec2 b) {
+  vec2 p = twoProd(a.x, b.x);
+  float cross = forceEval(a.x * b.y + a.y * b.x);
+  float py = forceEval(p.y + cross);
+  return quickTwoSum(p.x, py);
+}
+
+// Add single float to double-single
+vec2 ds_add_f(vec2 a, float b) {
+  vec2 s = twoSum(a.x, b);
+  float sy = forceEval(s.y + a.y);
+  return quickTwoSum(s.x, sy);
+}
+
+vec3 getColor(int iterations, int maxIter) {
+  if (iterations == 0) return vec3(0.0);
+  float t = float(iterations) / float(maxIter);
+  // Match CPU: scaledPos = t * (paletteSize - 1) * 3 = t * 8 * 3
+  float scaledPos = t * 8.0 * 3.0;
+  // Match CPU: index = floor(scaledPos) % (paletteSize - 1) = floor(scaledPos) % 8
   int index = int(floor(scaledPos)) % 8;
-  float frac = fract(scaledPos);
+  // Match CPU: fraction = scaledPos - floor(scaledPos)
+  float frac = scaledPos - floor(scaledPos);
+
+  // DEBUG: Show raw iteration count as grayscale to compare with CPU
+  // return vec3(t);  // Uncomment to debug
 
   return mix(palette[index], palette[index + 1], frac);
 }
 
+// Multiply double-single by float
+vec2 ds_mul_f(vec2 a, float b) {
+  vec2 p = twoProd(a.x, b);
+  p.y += a.y * b;
+  return quickTwoSum(p.x, p.y);
+}
+
 void main() {
-  // Calculate pixel offset from center in fractal units
-  vec2 pixelOffset = (v_texCoord - 0.5) * u_resolution * u_zoom;
+  // Pixel position: x goes 0 to width, y goes 0 to height
+  // Match CPU: px = centerX + (x - width/2) * zoom
+  //            py = centerY + (y - height/2) * zoom
+  // In WebGL, v_texCoord.y=0 is bottom, v_texCoord.y=1 is top
+  // But we want y=0 at top to match CPU canvas coordinates
+  // So we flip: y = (1 - v_texCoord.y) * height
+  float x = v_texCoord.x * u_resolution.x;
+  float y = (1.0 - v_texCoord.y) * u_resolution.y;
 
-  // Delta_0 = pixel position - reference position
-  // (reference is at center, so delta_0 = pixelOffset + centerOffset)
-  vec2 delta = pixelOffset + u_centerOffset;
-  vec2 delta0 = delta;
+  float pixelX = x - u_resolution.x * 0.5;
+  float pixelY = y - u_resolution.y * 0.5;
 
+  // Calculate offset as simple float - this is fine because:
+  // pixel * zoom = 500 * 2.5e-9 = 1.25e-6, which fits in float32
+  // We use zoom.x (hi part) since zoom.y is negligible for this multiplication
+  float offsetX = pixelX * u_zoom.x;
+  float offsetY = pixelY * u_zoom.x;
+
+  // c = center + offset using double-single addition
+  // This is where precision matters: adding small offset to center
+  vec2 cx = ds_add_f(vec2(u_centerHi.x, u_centerLo.x), offsetX);
+  vec2 cy = ds_add_f(vec2(u_centerHi.y, u_centerLo.y), offsetY);
+
+  // Combine DS to single float for iteration
+  // This should work because z stays bounded near |z| < 2
+  float cr = cx.x + cx.y;
+  float ci = cy.x + cy.y;
+
+  // Standard Mandelbrot iteration using the high-precision c values
+  // cr and ci already have the precision we need from DS coordinate calculation
+  float zr = 0.0;
+  float zi = 0.0;
   int iterations = 0;
 
-  // Perturbation iteration:
-  // delta_{n+1} = 2 * Z_n * delta_n + delta_n² + delta_0
-  // where Z_n is the reference orbit
-  for (int i = 0; i < u_referenceLength && i < u_maxIterations; i++) {
-    // Get reference orbit value at this iteration
-    float refReal = texelFetch(u_referenceReal, ivec2(i, 0), 0).r;
-    float refImag = texelFetch(u_referenceImag, ivec2(i, 0), 0).r;
+  for (int i = 0; i < 100000; i++) {
+    if (i >= u_maxIterations) break;
 
-    // Full z = Z + delta (for escape check)
-    vec2 z = vec2(refReal + delta.x, refImag + delta.y);
+    float zr2 = zr * zr;
+    float zi2 = zi * zi;
 
-    // Check escape: |z|² > 4
-    if (dot(z, z) > 4.0) {
+    if (zr2 + zi2 > 4.0) {
       iterations = i;
       break;
     }
 
-    // delta_{n+1} = 2 * Z_n * delta_n + delta_n² + delta_0
-    // Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-
-    // 2 * Z_n * delta_n
-    float twoZdReal = 2.0 * (refReal * delta.x - refImag * delta.y);
-    float twoZdImag = 2.0 * (refReal * delta.y + refImag * delta.x);
-
-    // delta_n²
-    float delta2Real = delta.x * delta.x - delta.y * delta.y;
-    float delta2Imag = 2.0 * delta.x * delta.y;
-
-    // Sum all terms
-    delta.x = twoZdReal + delta2Real + delta0.x;
-    delta.y = twoZdImag + delta2Imag + delta0.y;
-
+    float new_zi = 2.0 * zr * zi + ci;
+    float new_zr = zr2 - zi2 + cr;
+    zr = new_zr;
+    zi = new_zi;
     iterations = i + 1;
   }
 
-  // If we used all reference orbit iterations, point is likely in set
-  if (iterations >= u_referenceLength - 1) {
+  if (iterations >= u_maxIterations) {
     iterations = 0;
   }
 
-  fragColor = vec4(getColor(iterations), 1.0);
+  fragColor = vec4(getColor(iterations, u_maxIterations), 1.0);
 }
 `;
 
-export class WebGLPerturbationRenderer {
+export class WebGLMandelbrotRenderer {
   private canvas: HTMLCanvasElement;
   private gl: WebGL2RenderingContext | null = null;
   private program: WebGLProgram | null = null;
-  private referenceRealTexture: WebGLTexture | null = null;
-  private referenceImagTexture: WebGLTexture | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -179,11 +269,7 @@ export class WebGLPerturbationRenderer {
     gl.enableVertexAttribArray(positionLocation);
     gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
 
-    // Create textures for reference orbit
-    this.referenceRealTexture = gl.createTexture();
-    this.referenceImagTexture = gl.createTexture();
-
-    log('WebGL perturbation renderer initialized');
+    log('WebGL Mandelbrot renderer initialized');
     return true;
   }
 
@@ -207,78 +293,70 @@ export class WebGLPerturbationRenderer {
     return shader;
   }
 
-  uploadReferenceOrbit(orbit: ReferenceOrbit): void {
-    const gl = this.gl;
-    if (!gl) return;
-
-    // Upload real parts
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.referenceRealTexture);
-    gl.texImage2D(
-      gl.TEXTURE_2D, 0, gl.R32F,
-      orbit.length, 1, 0,
-      gl.RED, gl.FLOAT,
-      new Float32Array(orbit.zReal)
-    );
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-    // Upload imaginary parts
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.referenceImagTexture);
-    gl.texImage2D(
-      gl.TEXTURE_2D, 0, gl.R32F,
-      orbit.length, 1, 0,
-      gl.RED, gl.FLOAT,
-      new Float32Array(orbit.zImag)
-    );
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-    log('Uploaded reference orbit with', orbit.length, 'iterations');
-  }
-
   render(
     width: number,
     height: number,
-    zoom: number,
-    centerOffsetX: number,
-    centerOffsetY: number,
-    referenceLength: number,
+    centerXHi: number,
+    centerYHi: number,
+    centerXLo: number,
+    centerYLo: number,
+    zoomHi: number,
+    zoomLo: number,
     maxIterations: number
   ): void {
     const gl = this.gl;
     const program = this.program;
     if (!gl || !program) return;
 
+    // Ensure canvas size matches requested size
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      log('WebGL: Resizing canvas from', this.canvas.width, 'x', this.canvas.height, 'to', width, 'x', height);
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
+
     gl.viewport(0, 0, width, height);
     gl.useProgram(program);
 
+    // Debug: log uniform values
+    log('WebGL uniforms:', {
+      zoomHi, zoomLo,
+      centerXHi, centerYHi,
+      centerXLo, centerYLo,
+      maxIterations
+    });
+
+    // Get uniform locations once and check if valid
+    const loc_resolution = gl.getUniformLocation(program, 'u_resolution');
+    const loc_zoom = gl.getUniformLocation(program, 'u_zoom');
+    const loc_centerHi = gl.getUniformLocation(program, 'u_centerHi');
+    const loc_centerLo = gl.getUniformLocation(program, 'u_centerLo');
+    const loc_maxIter = gl.getUniformLocation(program, 'u_maxIterations');
+
+    log('WebGL uniform locations:', {
+      resolution: loc_resolution,
+      zoom: loc_zoom,
+      centerHi: loc_centerHi,
+      centerLo: loc_centerLo,
+      maxIter: loc_maxIter
+    });
+
     // Set uniforms
-    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), width, height);
-    gl.uniform1f(gl.getUniformLocation(program, 'u_zoom'), zoom);
-    gl.uniform2f(gl.getUniformLocation(program, 'u_centerOffset'), centerOffsetX, centerOffsetY);
-    gl.uniform1i(gl.getUniformLocation(program, 'u_referenceLength'), referenceLength);
-    gl.uniform1i(gl.getUniformLocation(program, 'u_maxIterations'), maxIterations);
-
-    // Bind textures
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.referenceRealTexture);
-    gl.uniform1i(gl.getUniformLocation(program, 'u_referenceReal'), 0);
-
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.referenceImagTexture);
-    gl.uniform1i(gl.getUniformLocation(program, 'u_referenceImag'), 1);
+    gl.uniform2f(loc_resolution, width, height);
+    gl.uniform2f(loc_zoom, zoomHi, zoomLo);
+    gl.uniform2f(loc_centerHi, centerXHi, centerYHi);
+    gl.uniform2f(loc_centerLo, centerXLo, centerYLo);
+    gl.uniform1i(loc_maxIter, maxIterations);
 
     // Draw
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  getImageData(): ImageData | null {
+  isSupported(): boolean {
+    return this.gl !== null && this.program !== null;
+  }
+
+  readPixels(): Uint8Array | null {
     const gl = this.gl;
     if (!gl) return null;
 
@@ -287,27 +365,21 @@ export class WebGLPerturbationRenderer {
     const pixels = new Uint8Array(width * height * 4);
     gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
-    // WebGL has origin at bottom-left, flip vertically
-    const flipped = new Uint8ClampedArray(width * height * 4);
+    // Flip vertically (WebGL is bottom-up)
+    const flipped = new Uint8Array(width * height * 4);
     for (let y = 0; y < height; y++) {
       const srcRow = (height - 1 - y) * width * 4;
       const dstRow = y * width * 4;
-      flipped.set(pixels.subarray(srcRow, srcRow + width * 4), dstRow);
+      for (let x = 0; x < width * 4; x++) {
+        flipped[dstRow + x] = pixels[srcRow + x];
+      }
     }
-
-    return new ImageData(flipped, width, height);
-  }
-
-  isSupported(): boolean {
-    return this.gl !== null && this.program !== null;
+    return flipped;
   }
 
   dispose(): void {
     const gl = this.gl;
     if (!gl) return;
-
-    if (this.referenceRealTexture) gl.deleteTexture(this.referenceRealTexture);
-    if (this.referenceImagTexture) gl.deleteTexture(this.referenceImagTexture);
     if (this.program) gl.deleteProgram(this.program);
   }
 }

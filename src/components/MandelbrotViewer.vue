@@ -19,13 +19,14 @@
     <div class="size-indicator">
       <div>{{ formattedSize }}</div>
       <div v-if="pixelSizeInfo">{{ pixelSizeInfo }}</div>
+      <div v-if="useGPU" class="gpu-badge">GPU</div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, watch, nextTick } from 'vue';
-import { useMandelbrotWorker } from '../composables/useMandelbrotWorker';
+import { useHybridRenderer } from '../composables/useHybridRenderer';
 import { usePhysicalSize } from '../composables/usePhysicalSize';
 import { useViewStore } from '../stores/view';
 import { storeToRefs } from 'pinia';
@@ -43,13 +44,14 @@ const route = useRoute();
 
 // --- Canvas Elements ---
 const displayCanvas = ref<HTMLCanvasElement | undefined>(undefined);
-let renderCanvas: HTMLCanvasElement | null = null;
+let renderWidth = 0;
+let renderHeight = 0;
 
 // --- Physical Size Calculation ---
 const { formattedSize, pixelSizeInfo } = usePhysicalSize(displayCanvas);
 
-// --- Worker Communication ---
-const { isRendering, renderedImage, render } = useMandelbrotWorker();
+// --- Hybrid Renderer (GPU with CPU fallback) ---
+const { isRendering, useGPU, init, resize, render, setOnRenderComplete } = useHybridRenderer();
 
 // --- Gesture State ---
 const isPointerDown = ref(false);
@@ -69,26 +71,19 @@ const viewGestureZoom = ref(1);
 const viewTransformOrigin = ref('center center');
 
 // --- Constants ---
-// Adaptive max dimension based on device capabilities
-// Mobile devices (lower DPR or smaller screens) get smaller canvas for performance
-// Desktop devices get larger canvas for quality
 const getMaxCanvasDimension = (): number => {
   const dpr = window.devicePixelRatio || 1;
   const screenSize = Math.max(window.screen.width, window.screen.height);
 
-  // Mobile: DPR >= 2 typically, but smaller screens
   if (screenSize <= 768) {
     return 600;
   }
-  // Tablet
   if (screenSize <= 1024) {
     return 800;
   }
-  // Desktop with high DPR (e.g., Retina)
   if (dpr >= 2) {
     return 1200;
   }
-  // Standard desktop
   return 1000;
 };
 
@@ -100,36 +95,32 @@ onMounted(async () => {
   if (!canvas) return;
 
   setupCanvasDimensions(canvas);
-  setupRenderCanvas(canvas);
+  calculateRenderDimensions(canvas);
+
+  // Initialize hybrid renderer with calculated dimensions
+  const { gpuSupported } = init(renderWidth, renderHeight);
+  log('Renderer initialized. GPU:', gpuSupported);
+
+  // Set callback for when render completes
+  setOnRenderComplete((sourceCanvas: HTMLCanvasElement) => {
+    resetViewTransforms();
+    drawToDisplay(sourceCanvas);
+  });
 
   await router.isReady();
   updateFromUrl(route.hash);
   requestRender();
 });
 
-// --- Watchers (The Single Source of Truth for Rendering) ---
-// Watch the string values, not the number conversions, to detect changes
-// even when they're too small to affect the double representation
+// --- Watchers ---
 watch([centerXStr, centerYStr, zoomStr], () => {
   requestRender();
   updateUrl();
 });
 
 watch(() => route.hash, (newHash) => {
-  // Avoid updating from URL if a gesture just finished, as it will be redundant.
   if (!isPointerDown.value) {
     updateFromUrl(newHash);
-  }
-});
-
-watch(renderedImage, (newImage) => {
-  if (newImage && renderCanvas) {
-    const renderCtx = renderCanvas.getContext('2d');
-    if (renderCtx) {
-      renderCtx.putImageData(newImage, 0, 0);
-      resetViewTransforms();
-      drawRenderedToDisplay();
-    }
   }
 });
 
@@ -142,39 +133,37 @@ function setupCanvasDimensions(canvas: HTMLCanvasElement) {
   canvas.style.height = `${window.innerHeight}px`;
 }
 
-function setupRenderCanvas(canvas: HTMLCanvasElement) {
-  renderCanvas = document.createElement('canvas');
+function calculateRenderDimensions(canvas: HTMLCanvasElement) {
   const aspectRatio = canvas.width / canvas.height;
   if (canvas.width > MAX_CANVAS_DIMENSION || canvas.height > MAX_CANVAS_DIMENSION) {
     if (canvas.width > canvas.height) {
-      renderCanvas.width = MAX_CANVAS_DIMENSION;
-      renderCanvas.height = MAX_CANVAS_DIMENSION / aspectRatio;
+      renderWidth = MAX_CANVAS_DIMENSION;
+      renderHeight = Math.floor(MAX_CANVAS_DIMENSION / aspectRatio);
     } else {
-      renderCanvas.height = MAX_CANVAS_DIMENSION;
-      renderCanvas.width = MAX_CANVAS_DIMENSION * aspectRatio;
+      renderHeight = MAX_CANVAS_DIMENSION;
+      renderWidth = Math.floor(MAX_CANVAS_DIMENSION * aspectRatio);
     }
   } else {
-    renderCanvas.width = canvas.width;
-    renderCanvas.height = canvas.height;
+    renderWidth = canvas.width;
+    renderHeight = canvas.height;
   }
 }
 
 // --- Rendering Functions ---
 function requestRender() {
-  if (!renderCanvas) return;
-  // The isRendering flag in the worker prevents multiple renders from running in parallel.
-  // The renderId system ensures only the latest result is used.
+  if (renderWidth === 0 || renderHeight === 0) return;
+
   nextTick(() => {
     render({
-      canvasWidth: renderCanvas!.width,
-      canvasHeight: renderCanvas!.height,
+      width: renderWidth,
+      height: renderHeight,
+      centerXDecimal: centerXDecimal.value,
+      centerYDecimal: centerYDecimal.value,
       centerX: centerX.value,
       centerY: centerY.value,
       zoom: zoom.value,
-      // Pass low components for double-double precision at high zoom
       centerXLo: centerXLo.value,
       centerYLo: centerYLo.value,
-      // Pass quad-double components for ultra-deep zoom
       centerX2: centerX2.value,
       centerX3: centerX3.value,
       centerY2: centerY2.value,
@@ -183,11 +172,15 @@ function requestRender() {
   });
 }
 
-function drawRenderedToDisplay() {
+function drawToDisplay(sourceCanvas: HTMLCanvasElement) {
   const displayCtx = displayCanvas.value?.getContext('2d');
-  if (displayCtx && renderCanvas && displayCanvas.value) {
+  if (displayCtx && displayCanvas.value) {
     displayCtx.clearRect(0, 0, displayCanvas.value.width, displayCanvas.value.height);
-    displayCtx.drawImage(renderCanvas, 0, 0, renderCanvas.width, renderCanvas.height, 0, 0, displayCanvas.value.width, displayCanvas.value.height);
+    displayCtx.drawImage(
+      sourceCanvas,
+      0, 0, sourceCanvas.width, sourceCanvas.height,
+      0, 0, displayCanvas.value.width, displayCanvas.value.height
+    );
   }
 }
 
@@ -200,7 +193,6 @@ function resetViewTransforms() {
 
 // --- URL Synchronization ---
 function updateUrl() {
-  // Use Decimal's full precision for URL to preserve coordinates when sharing
   const hash = `#/x=${centerXDecimal.value.toString()}&y=${centerYDecimal.value.toString()}&z=${zoomDecimal.value.toExponential(10)}`;
   router.replace({ hash });
 }
@@ -222,10 +214,9 @@ function handleMouseUp() {
   if (!isPointerDown.value) return;
   isPointerDown.value = false;
 
-  if ((viewPanX.value !== 0 || viewPanY.value !== 0) && renderCanvas) {
-    // Convert CSS pixels to render canvas pixels using Decimal for precision
-    const scaleX = new Decimal(renderCanvas.width).div(window.innerWidth);
-    const scaleY = new Decimal(renderCanvas.height).div(window.innerHeight);
+  if ((viewPanX.value !== 0 || viewPanY.value !== 0) && renderWidth > 0) {
+    const scaleX = new Decimal(renderWidth).div(window.innerWidth);
+    const scaleY = new Decimal(renderHeight).div(window.innerHeight);
     const deltaX = scaleX.mul(viewPanX.value).mul(zoomDecimal.value);
     const deltaY = scaleY.mul(viewPanY.value).mul(zoomDecimal.value);
     const newCenterX = centerXDecimal.value.minus(deltaX);
@@ -235,22 +226,18 @@ function handleMouseUp() {
 }
 
 function handleWheel(e: WheelEvent) {
-  if (!renderCanvas) return;
+  if (renderWidth === 0) return;
   const zoomFactor = new Decimal(e.deltaY < 0 ? 0.8 : 1.25);
   const rect = displayCanvas.value!.getBoundingClientRect();
 
-  // Calculate mouse offset from center in CSS pixels
   const offsetCssX = e.clientX - rect.left - rect.width / 2;
   const offsetCssY = e.clientY - rect.top - rect.height / 2;
 
-  // Convert to render canvas pixels
-  const scaleX = new Decimal(renderCanvas.width).div(rect.width);
-  const scaleY = new Decimal(renderCanvas.height).div(rect.height);
+  const scaleX = new Decimal(renderWidth).div(rect.width);
+  const scaleY = new Decimal(renderHeight).div(rect.height);
   const offsetRenderX = scaleX.mul(offsetCssX);
   const offsetRenderY = scaleY.mul(offsetCssY);
 
-  // Simplified formula using Decimal for precision
-  // newCenter = center + offset * zoom * (1 - zoomFactor)
   const oneMinusZoomFactor = new Decimal(1).minus(zoomFactor);
   const newZoom = zoomDecimal.value.mul(zoomFactor);
   const newCenterX = centerXDecimal.value.plus(offsetRenderX.mul(zoomDecimal.value).mul(oneMinusZoomFactor));
@@ -296,46 +283,50 @@ function handleTouchMove(e: TouchEvent) {
 }
 
 function handleTouchEnd() {
-  if (!isPointerDown.value || !displayCanvas.value || !renderCanvas) return;
+  if (!isPointerDown.value || !displayCanvas.value || renderWidth === 0) return;
   isPointerDown.value = false;
 
-  // Determine the initial view state based on whether it was a pinch gesture
-  // Use Decimal for precision in coordinate calculations
-  const initialView: FractalView = touchState.value
-    ? {
-        centerX: touchState.value.initialCenterX,
-        centerY: touchState.value.initialCenterY,
-        zoom: touchState.value.initialZoom,
-      }
-    : {
-        centerX: centerXDecimal.value,
-        centerY: centerYDecimal.value,
-        zoom: zoomDecimal.value,
-      };
+  // Two-finger pinch-zoom gesture
+  if (touchState.value) {
+    const initialView: FractalView = {
+      centerX: touchState.value.initialCenterX,
+      centerY: touchState.value.initialCenterY,
+      zoom: touchState.value.initialZoom,
+    };
 
-  // Get the final bounding rectangle of the display canvas after all visual transforms
-  const finalDisplayCanvasRect = displayCanvas.value.getBoundingClientRect();
+    const finalDisplayCanvasRect = displayCanvas.value.getBoundingClientRect();
 
-  const renderCanvasInfo: RenderCanvasInfo = {
-    width: renderCanvas.width,
-    height: renderCanvas.height,
-  };
+    const renderCanvasInfo: RenderCanvasInfo = {
+      width: renderWidth,
+      height: renderHeight,
+    };
 
-  const viewportInfo: ViewportInfo = {
-    width: window.innerWidth,
-    height: window.innerHeight,
-  };
+    const viewportInfo: ViewportInfo = {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
 
-  const newView = calculateNewView(
-    initialView,
-    finalDisplayCanvasRect,
-    renderCanvasInfo,
-    viewportInfo
-  );
+    const newView = calculateNewView(
+      initialView,
+      finalDisplayCanvasRect,
+      renderCanvasInfo,
+      viewportInfo
+    );
 
-  setView(newView);
-
-  touchState.value = null;
+    setView(newView);
+    touchState.value = null;
+  } else {
+    // Single-finger pan - use same logic as mouse drag
+    if (viewPanX.value !== 0 || viewPanY.value !== 0) {
+      const scaleX = new Decimal(renderWidth).div(window.innerWidth);
+      const scaleY = new Decimal(renderHeight).div(window.innerHeight);
+      const deltaX = scaleX.mul(viewPanX.value).mul(zoomDecimal.value);
+      const deltaY = scaleY.mul(viewPanY.value).mul(zoomDecimal.value);
+      const newCenterX = centerXDecimal.value.minus(deltaX);
+      const newCenterY = centerYDecimal.value.minus(deltaY);
+      setView({ centerX: newCenterX, centerY: newCenterY, zoom: zoomDecimal.value });
+    }
+  }
 }
 
 function getTouchDistance(touches: TouchList): number {
@@ -394,5 +385,14 @@ function getTouchMidpoint(touches: TouchList): { x: number; y: number } {
   border-radius: 5px;
   font-family: sans-serif;
   white-space: nowrap;
+}
+.gpu-badge {
+  display: inline-block;
+  background-color: #4CAF50;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.8em;
+  margin-top: 4px;
 }
 </style>
