@@ -62,6 +62,29 @@ Formatos generados: SVG, ICO, PNG 192px, PNG 512px
 - `public/mandelbrot-icon.svg` - Favicon (nuevo)
 - `index.html` - Referencias a íconos
 
+## Renderizado progresivo
+
+Implementamos rendering progresivo para mejor UX:
+
+- El worker ahora renderiza en múltiples pasadas: 16x16 → 8x8 → 4x4 → 2x2 → 1x1
+- Cada pasada envía un mensaje al main thread que actualiza el canvas
+- El usuario ve la imagen pixelada inmediatamente y observa cómo se refina
+- Esto permite usar más iteraciones sin frustrar al usuario con esperas
+
+### Cambios en iteraciones
+
+Con el rendering progresivo, aumentamos las iteraciones:
+- Base: 300 iteraciones (zoom inicial)
+- Escala: +150 iteraciones por orden de magnitud de zoom
+- Cap máximo: 100,000 iteraciones
+
+### Paleta de colores mejorada
+
+Nueva paleta con transiciones suaves:
+- Deep blue → Ocean blue → Cyan white → Orange → Red orange → Crimson → Purple → Dark purple → Very dark blue
+- Interpolación lineal entre colores
+- Cicla 3 veces a través de la paleta para más variación
+
 ## Pendientes para futuras sesiones
 
 - La precisión quad-double real requeriría una implementación más compleja

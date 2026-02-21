@@ -15,10 +15,16 @@ export function useMandelbrotWorker() {
 
   function setupWorkerHandlers() {
     worker.onmessage = (e) => {
-      const { imageData, renderId } = e.data;
+      const { imageData, renderId, isComplete, pass } = e.data;
       if (renderId === currentRenderId.value) {
+        // Progressive rendering: update on each pass
         renderedImage.value = imageData;
-        isRendering.value = false;
+        if (isComplete) {
+          isRendering.value = false;
+          log('useMandelbrotWorker: Render complete.');
+        } else {
+          log('useMandelbrotWorker: Progressive pass', pass, 'received.');
+        }
       } else {
         log('useMandelbrotWorker: Discarding old render result.', renderId, currentRenderId.value);
       }

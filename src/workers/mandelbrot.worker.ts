@@ -12,57 +12,156 @@ const QUAD_PRECISION_THRESHOLD = 1e-31;
 // Dynamic iteration calculation based on zoom level
 // More zoom = more iterations needed to see fine detail
 function calculateMaxIterations(zoom: number): number {
-  const BASE_ITERATIONS = 500;
-  const ITERATION_SCALE = 100; // iterations per order of magnitude of zoom
+  const BASE_ITERATIONS = 300;
+  const ITERATION_SCALE = 150; // iterations per order of magnitude of zoom
 
-  // zoom of 0.004 (initial) = 0 extra iterations
-  // zoom of 1e-6 = ~400 extra iterations
-  // zoom of 1e-12 = ~1000 extra iterations
-  // zoom of 1e-18 = ~1600 extra iterations
+  // zoom of 0.004 (initial) = 300 iterations
+  // zoom of 1e-6 = ~900 extra iterations
+  // zoom of 1e-12 = ~1800 extra iterations
+  // zoom of 1e-18 = ~2700 extra iterations
+  // zoom of 1e-30 = ~4500 extra iterations
   const zoomFactor = Math.max(0, -Math.log10(zoom) - 2); // -2 because initial zoom is ~0.004
   const maxIterations = Math.floor(BASE_ITERATIONS + ITERATION_SCALE * zoomFactor);
 
-  // Cap at reasonable maximum to prevent infinite loops
-  return Math.min(maxIterations, 50000);
+  // Higher cap now that rendering is progressive
+  return Math.min(maxIterations, 100000);
 }
+
+// Progressive block sizes: start coarse, refine gradually
+const PROGRESSIVE_BLOCK_SIZES = [16, 8, 4, 2, 1];
 
 self.onmessage = function (e) {
   log('Worker: Message received.', e.data);
   const { canvasWidth, canvasHeight, centerX, centerY, zoom, centerXLo, centerYLo, renderId } = e.data;
+  const { centerX2 = 0, centerX3 = 0, centerY2 = 0, centerY3 = 0 } = e.data;
   const MAX_ITERATIONS = calculateMaxIterations(zoom);
   log('Worker: Using', MAX_ITERATIONS, 'iterations for zoom', zoom);
 
-  const imageData = new ImageData(canvasWidth, canvasHeight);
-  const data = imageData.data;
-
-  // Choose precision mode and block size based on zoom level
+  // Choose precision mode based on zoom level
   const useQuadPrecision = zoom < QUAD_PRECISION_THRESHOLD;
   const useHighPrecisionCoords = zoom < HIGH_PRECISION_COORDS_THRESHOLD;
   const useHighPrecisionIterations = zoom < HIGH_PRECISION_ITERATIONS_THRESHOLD;
-  const useUltraDeep = zoom < ULTRA_DEEP_THRESHOLD;
-  const blockSize = useUltraDeep ? 3 : 2;
   log('Worker: Precision mode - quad:', useQuadPrecision, 'coords:', useHighPrecisionCoords, 'iterations:', useHighPrecisionIterations, 'zoom:', zoom);
 
-  if (useQuadPrecision) {
-    // Quad-double precision (~62 digits), 4x4 blocks
-    const { centerX2 = 0, centerX3 = 0, centerY2 = 0, centerY3 = 0 } = e.data;
-    renderQuadPrecision(data, canvasWidth, canvasHeight,
-      centerX, centerXLo || 0, centerX2, centerX3,
-      centerY, centerYLo || 0, centerY2, centerY3,
-      zoom, MAX_ITERATIONS);
-  } else if (useHighPrecisionIterations) {
-    // Full double-double for both coordinates and iterations
-    renderFullPrecision(data, canvasWidth, canvasHeight, centerX, centerY, centerXLo || 0, centerYLo || 0, zoom, MAX_ITERATIONS, blockSize);
-  } else if (useHighPrecisionCoords) {
-    // Double-double for coordinates, standard for iterations
-    renderHighPrecisionCoords(data, canvasWidth, canvasHeight, centerX, centerY, centerXLo || 0, centerYLo || 0, zoom, MAX_ITERATIONS);
-  } else {
-    renderStandard(data, canvasWidth, canvasHeight, centerX, centerY, zoom, MAX_ITERATIONS);
-  }
+  // Always render to full 1x1 resolution - progressive rendering handles the wait
+  const minBlockSize = 1;
 
-  log('Worker: Sending message back.', { renderId });
-  self.postMessage({ imageData, renderId });
+  // Track which pixels have been computed at full resolution
+  const computed = new Uint8Array(canvasWidth * canvasHeight);
+  const imageData = new ImageData(canvasWidth, canvasHeight);
+  const data = imageData.data;
+
+  // Progressive rendering: coarse to fine
+  for (const blockSize of PROGRESSIVE_BLOCK_SIZES) {
+    if (blockSize < minBlockSize) continue;
+
+    renderProgressive(
+      data, computed, canvasWidth, canvasHeight,
+      centerX, centerY, centerXLo || 0, centerYLo || 0,
+      centerX2, centerX3, centerY2, centerY3,
+      zoom, MAX_ITERATIONS, blockSize,
+      useQuadPrecision, useHighPrecisionIterations, useHighPrecisionCoords
+    );
+
+    // Send intermediate result
+    const isComplete = blockSize === minBlockSize;
+    log('Worker: Sending pass', blockSize, 'complete:', isComplete);
+    self.postMessage({
+      imageData: new ImageData(new Uint8ClampedArray(data), canvasWidth, canvasHeight),
+      renderId,
+      pass: blockSize,
+      isComplete
+    });
+  }
 };
+
+// Progressive renderer that only computes new pixels
+function renderProgressive(
+  data: Uint8ClampedArray,
+  computed: Uint8Array,
+  canvasWidth: number,
+  canvasHeight: number,
+  centerXHi: number,
+  centerYHi: number,
+  centerXLo: number,
+  centerYLo: number,
+  centerX2: number,
+  centerX3: number,
+  centerY2: number,
+  centerY3: number,
+  zoom: number,
+  maxIterations: number,
+  blockSize: number,
+  useQuadPrecision: boolean,
+  useHighPrecisionIterations: boolean,
+  useHighPrecisionCoords: boolean
+) {
+  for (let bx = 0; bx < canvasWidth; bx += blockSize) {
+    for (let by = 0; by < canvasHeight; by += blockSize) {
+      // Check if center of block already computed at higher resolution
+      const cx = bx + Math.floor(blockSize / 2);
+      const cy = by + Math.floor(blockSize / 2);
+      if (cx < canvasWidth && cy < canvasHeight && computed[cy * canvasWidth + cx]) {
+        continue; // Already computed at finer resolution
+      }
+
+      const x = bx + blockSize / 2;
+      const y = by + blockSize / 2;
+
+      let iterations: number;
+
+      if (useQuadPrecision) {
+        const offsetX = (x - canvasWidth / 2) * zoom;
+        const offsetY = (y - canvasHeight / 2) * zoom;
+        const [qcx0, qcx1Temp] = ddAddD([centerXHi, centerXLo], offsetX);
+        const qcx1 = qcx1Temp + centerX2 + centerX3;
+        const [qcy0, qcy1Temp] = ddAddD([centerYHi, centerYLo], offsetY);
+        const qcy1 = qcy1Temp + centerY2 + centerY3;
+        iterations = calculateMandelbrotQDInline(qcx0, qcx1, 0, 0, qcy0, qcy1, 0, 0, maxIterations);
+      } else if (useHighPrecisionIterations) {
+        const offsetX = (x - canvasWidth / 2) * zoom;
+        const offsetY = (y - canvasHeight / 2) * zoom;
+        const [cxHi, cxLo] = ddAddD([centerXHi, centerXLo], offsetX);
+        const [cyHi, cyLo] = ddAddD([centerYHi, centerYLo], offsetY);
+        iterations = calculateMandelbrotDDInline(cxHi, cxLo, cyHi, cyLo, maxIterations);
+      } else if (useHighPrecisionCoords) {
+        const offsetX = (x - canvasWidth / 2) * zoom;
+        const offsetY = (y - canvasHeight / 2) * zoom;
+        const [cxHi, cxLo] = ddAddD([centerXHi, centerXLo], offsetX);
+        const [cyHi, cyLo] = ddAddD([centerYHi, centerYLo], offsetY);
+        const cx = cxHi + cxLo;
+        const cy = cyHi + cyLo;
+        iterations = calculateMandelbrot(cx, cy, maxIterations);
+      } else {
+        const px = centerXHi + (x - canvasWidth / 2) * zoom;
+        const py = centerYHi + (y - canvasHeight / 2) * zoom;
+        iterations = calculateMandelbrot(px, py, maxIterations);
+      }
+
+      const color = iterations === 0
+        ? { r: 0, g: 0, b: 0 }
+        : getColor(iterations, maxIterations);
+
+      // Fill block and mark as computed
+      for (let dx = 0; dx < blockSize && bx + dx < canvasWidth; dx++) {
+        for (let dy = 0; dy < blockSize && by + dy < canvasHeight; dy++) {
+          const px = bx + dx;
+          const py = by + dy;
+          const pixelIndex = (py * canvasWidth + px) * 4;
+          data[pixelIndex] = color.r;
+          data[pixelIndex + 1] = color.g;
+          data[pixelIndex + 2] = color.b;
+          data[pixelIndex + 3] = 255;
+
+          // Mark center pixel as computed for this block size
+          if (dx === Math.floor(blockSize / 2) && dy === Math.floor(blockSize / 2)) {
+            computed[py * canvasWidth + px] = 1;
+          }
+        }
+      }
+    }
+  }
+}
 
 function renderStandard(
   data: Uint8ClampedArray,
@@ -476,15 +575,38 @@ function renderQuadPrecision(
 
 // ============ Color functions ============
 
+// Beautiful color palette inspired by classic fractal visualizations
+const PALETTE = [
+  [  0,   7, 100],  // Deep blue
+  [ 32, 107, 203],  // Ocean blue
+  [237, 255, 255],  // Cyan white
+  [255, 170,   0],  // Orange
+  [255,  85,   0],  // Red orange
+  [200,  20,  60],  // Crimson
+  [100,   7, 100],  // Purple
+  [ 50,  10,  80],  // Dark purple
+  [ 10,   5,  40],  // Very dark blue
+];
+
 function getColor(iterations: number, maxIterations: number) {
-  let hue = (iterations % maxIterations) / maxIterations;
-  hue = Math.pow(hue, 0.5);
-  hue = hue * 360;
+  // Smooth coloring using logarithmic scaling
+  const t = iterations / maxIterations;
 
-  const saturation = 1;
-  const lightness = 0.5;
+  // Map to palette with smooth interpolation
+  const paletteSize = PALETTE.length;
+  const scaledPos = t * (paletteSize - 1) * 3; // Cycle through palette multiple times
+  const index = Math.floor(scaledPos) % (paletteSize - 1);
+  const fraction = scaledPos - Math.floor(scaledPos);
 
-  return hslToRgb(hue / 360, saturation, lightness);
+  const c1 = PALETTE[index];
+  const c2 = PALETTE[index + 1];
+
+  // Smooth interpolation between colors
+  const r = Math.round(c1[0] + (c2[0] - c1[0]) * fraction);
+  const g = Math.round(c1[1] + (c2[1] - c1[1]) * fraction);
+  const b = Math.round(c1[2] + (c2[2] - c1[2]) * fraction);
+
+  return { r, g, b };
 }
 
 function hslToRgb(h: number, s: number, l: number) {
