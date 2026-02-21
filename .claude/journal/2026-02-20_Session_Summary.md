@@ -85,8 +85,28 @@ Nueva paleta con transiciones suaves:
 - Interpolación lineal entre colores
 - Cicla 3 veces a través de la paleta para más variación
 
+## Intento de GPU con Perturbation Theory
+
+Se implementó código para renderizado GPU usando perturbation theory:
+
+### Archivos creados (no integrados aún)
+- `src/renderers/perturbation.ts` - Cálculo de órbita de referencia con Decimal.js
+- `src/renderers/webglRenderer.ts` - Renderer WebGL2 con fragment shader
+- `src/composables/useHybridRenderer.ts` - Composable híbrido GPU/CPU
+
+### Cómo funciona perturbation theory
+1. CPU calcula la órbita del punto central con precisión arbitraria (Decimal.js)
+2. GPU calcula solo los deltas desde esa órbita: `δ_{n+1} = 2·Z_n·δ_n + δ_n² + δ_0`
+3. Los deltas son pequeños, caben en floats de 32 bits incluso a zoom profundo
+
+### Por qué no está activo
+El canvas 2D y WebGL no pueden compartir contexto. Necesitamos:
+- Canvas WebGL offscreen separado
+- Copiar resultado al display canvas
+- Esto requiere más trabajo, dejado para futura sesión
+
 ## Pendientes para futuras sesiones
 
+- Activar GPU rendering con canvas offscreen separado
 - La precisión quad-double real requeriría una implementación más compleja
 - Posible optimización: Web Workers paralelos para tiles
-- Considerar WebGL para aceleración por GPU

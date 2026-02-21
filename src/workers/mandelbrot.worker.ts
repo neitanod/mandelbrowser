@@ -24,7 +24,7 @@ function calculateMaxIterations(zoom: number): number {
   const maxIterations = Math.floor(BASE_ITERATIONS + ITERATION_SCALE * zoomFactor);
 
   // Higher cap now that rendering is progressive
-  return Math.min(maxIterations, 100000);
+  return Math.min(maxIterations, 200000);
 }
 
 // Progressive block sizes: start coarse, refine gradually
